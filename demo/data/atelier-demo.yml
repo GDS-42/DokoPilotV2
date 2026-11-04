@@ -1,0 +1,322 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Données de test de l'« Atelier Démo », petite menuiserie-ébénisterie FICTIVE.
+#
+# Tout est inventé : raisons sociales (toutes contiennent « Démo »), adresses, SIREN,
+# numéros de TVA, IBAN (banque « 99999 », qui n'existe pas), courriels (domaine
+# réservé .test). Les SIREN commencent par 0000, ce qui n'est attribué à aucune
+# entreprise ; ils respectent seulement la clé de Luhn exigée par Dokos.
+#
+# Les dates sont des décalages en jours par rapport au jour du chargement
+# (« jour: -30 » = il y a 30 jours), pour que la démo reste vraisemblable.
+# Chargées par demo/demo_loader.py (rôle Ansible demo_data, profil demo uniquement).
+# Description et scénarios : docs/donnees-de-test.md.
+
+societe:
+  siren: "000000018"
+  tva: FR66000000018
+  adresse:
+    ligne1: 12 rue des Copeaux
+    code_postal: "39000"
+    ville: Lons-le-Saunier
+  courriel: contact@atelier-demo.test
+  telephone: "+33 3 00 00 00 00"
+
+banque:
+  nom: Banque Démo
+  compte: Compte courant Banque Démo
+  iban: FR7699999000010000000010106
+  bic: DEMOFRPPXXX
+  compte_comptable: "5121"          # numéro du compte du plan comptable (512 Banques)
+  releve: bank/releve-demo.csv
+  # Date à laquelle correspondent les dates du fichier CSV ; le chargeur décale toutes
+  # les lignes pour que cette date devienne le jour du chargement.
+  date_de_reference: "2026-11-01"
+
+articles:
+  # Matières premières et fournitures (achetées, stockées)
+  - code: PLANCHE-CHENE
+    nom: Planche de chêne massif 27 mm
+    groupe: Raw Material
+    unite: Unit
+    stock: true
+    achat: 45.00
+  - code: PANNEAU-CP18
+    nom: Panneau contreplaqué bouleau 18 mm
+    groupe: Raw Material
+    unite: Unit
+    stock: true
+    achat: 38.50
+  - code: CHARNIERE-INV
+    nom: Charnières invisibles (lot de 10)
+    groupe: Consumable
+    unite: Unit
+    stock: true
+    achat: 24.00
+  - code: VIS-INOX
+    nom: Vis inox 4x40 (boîte de 500)
+    groupe: Consumable
+    unite: Unit
+    stock: true
+    achat: 18.90
+  - code: VERNIS-EAU
+    nom: Vernis à l'eau incolore 5 L
+    groupe: Consumable
+    unite: Unit
+    stock: true
+    achat: 62.00
+  - code: COLLE-BOIS
+    nom: Colle vinylique 1 kg
+    groupe: Consumable
+    unite: Unit
+    stock: true
+    achat: 9.80
+  # Produits finis (vendus)
+  - code: TABLE-CHENE
+    nom: Table de salle à manger en chêne
+    groupe: Products
+    unite: Unit
+    stock: true
+    vente: 1450.00
+  - code: CHAISE-CHENE
+    nom: Chaise en chêne
+    groupe: Products
+    unite: Unit
+    stock: true
+    vente: 280.00
+  - code: BIBLIO-MESURE
+    nom: Bibliothèque sur mesure
+    groupe: Products
+    unite: Unit
+    stock: true
+    vente: 2400.00
+  # Prestations (non stockées)
+  - code: POSE
+    nom: Pose et installation (heure)
+    groupe: Services
+    unite: Hour
+    stock: false
+    vente: 55.00
+  - code: LIVRAISON
+    nom: Livraison
+    groupe: Services
+    unite: Unit
+    stock: false
+    vente: 90.00
+  - code: ETUDE-PLAN
+    nom: Étude et plan sur mesure
+    groupe: Services
+    unite: Unit
+    stock: false
+    vente: 350.00
+
+clients:
+  - nom: Restaurant Démo Le Chêne Vert
+    type: Company
+    groupe: Commercial
+    siren: "000001016"
+    tva: FR53000001016
+    courriel: compta@chene-vert-demo.test
+    adresse: { ligne1: 3 place du Marché, code_postal: "39000", ville: Lons-le-Saunier }
+  - nom: Hôtel Démo des Tilleuls
+    type: Company
+    groupe: Commercial
+    siren: "000001024"
+    tva: FR77000001024
+    courriel: direction@tilleuls-demo.test
+    adresse: { ligne1: 8 avenue des Tilleuls, code_postal: "25000", ville: Besançon }
+  - nom: Agence Démo Architecture Intérieure
+    type: Company
+    groupe: Commercial
+    siren: "000001032"
+    tva: FR04000001032
+    courriel: projets@archi-demo.test
+    adresse: { ligne1: 21 rue de la République, code_postal: "21000", ville: Dijon }
+  - nom: Mairie de Démoville
+    type: Company
+    groupe: Government
+    siren: "000001040"
+    tva: FR28000001040
+    courriel: services-techniques@demoville.test
+    adresse: { ligne1: 1 place de la Mairie, code_postal: "39100", ville: Démoville }
+  - nom: Cabinet Démo Dentaire
+    type: Company
+    groupe: Commercial
+    siren: "000001057"
+    tva: FR79000001057
+    courriel: secretariat@dentaire-demo.test
+    adresse: { ligne1: 5 rue Pasteur, code_postal: "39000", ville: Lons-le-Saunier }
+  - nom: Jean Démo
+    type: Individual
+    groupe: Individual
+    courriel: jean.demo@exemple.test
+    adresse: { ligne1: 14 chemin des Vignes, code_postal: "39570", ville: Montmorot }
+
+fournisseurs:
+  - nom: Scierie Démo du Jura
+    groupe: Raw Material
+    siren: "000002014"
+    tva: FR40000002014
+    iban: FR7699999000010000000020194
+    adresse: { ligne1: Zone artisanale des Sapins, code_postal: "39300", ville: Champagnole }
+  - nom: Panneaux Démo Bois
+    groupe: Raw Material
+    siren: "000002022"
+    tva: FR64000002022
+    iban: FR7699999000010000000020291
+    adresse: { ligne1: 40 rue de l'Industrie, code_postal: "69007", ville: Lyon }
+  - nom: Quincaillerie Démo Pro
+    groupe: Hardware
+    siren: "000002030"
+    tva: FR88000002030
+    iban: FR7699999000010000000020388
+    adresse: { ligne1: 2 boulevard Gambetta, code_postal: "39000", ville: Lons-le-Saunier }
+  - nom: Peintures et Vernis Démo
+    groupe: Distributor
+    siren: "000002048"
+    tva: FR45000002048
+    iban: FR7699999000010000000020485
+    adresse: { ligne1: 17 rue des Teinturiers, code_postal: "71100", ville: Chalon-sur-Saône }
+  - nom: Transports Démo Express
+    groupe: Services
+    siren: "000002055"
+    tva: FR66000002055
+    iban: FR7699999000010000000020582
+    adresse: { ligne1: 9 route de Lyon, code_postal: "39000", ville: Lons-le-Saunier }
+  - nom: Maintenance Machines Démo
+    groupe: Services
+    siren: "000002063"
+    tva: FR90000002063
+    iban: FR7699999000010000000020679
+    adresse: { ligne1: 6 impasse des Rabots, code_postal: "25300", ville: Pontarlier }
+
+# Commandes d'achat (validées), avec leurs réceptions (validées) éventuelles.
+commandes_achat:
+  - cle: CA-1
+    fournisseur: Scierie Démo du Jura
+    jour: -70
+    lignes: [{ article: PLANCHE-CHENE, quantite: 20, prix: 45.00 }]
+    reception: { jour: -62 }
+  - cle: CA-2
+    fournisseur: Panneaux Démo Bois
+    jour: -45
+    lignes: [{ article: PANNEAU-CP18, quantite: 15, prix: 38.50 }]
+    reception: { jour: -40 }
+  - cle: CA-3
+    fournisseur: Quincaillerie Démo Pro
+    jour: -30
+    lignes:
+      - { article: CHARNIERE-INV, quantite: 10, prix: 24.00 }
+      - { article: VIS-INOX, quantite: 4, prix: 18.90 }
+    # Réception partielle : les vis ne sont pas encore arrivées.
+    reception: { jour: -25, lignes: [{ article: CHARNIERE-INV, quantite: 10 }] }
+  - cle: CA-4
+    fournisseur: Peintures et Vernis Démo
+    jour: -20
+    lignes:
+      - { article: VERNIS-EAU, quantite: 6, prix: 62.00 }
+      - { article: COLLE-BOIS, quantite: 10, prix: 9.80 }
+
+# Facture d'achat déjà traitée (validée et payée) avant l'arrivée de la facturation électronique.
+factures_achat:
+  - cle: FA-1
+    fournisseur: Peintures et Vernis Démo
+    numero_fournisseur: PV-0412
+    jour: -85
+    lignes: [{ article: VERNIS-EAU, quantite: 4, prix: 62.00 }]
+    paiement: { jour: -59, reference: VIR-PV-0412 }
+
+# Factures de vente (validées), échéance à 30 jours.
+factures_vente:
+  - cle: FV-1
+    client: Restaurant Démo Le Chêne Vert
+    jour: -80
+    lignes:
+      - { article: TABLE-CHENE, quantite: 2 }
+      - { article: POSE, quantite: 4 }
+    paiement: { jour: -45, reference: VIR-CHENEVERT-1 }
+  - cle: FV-2
+    client: Hôtel Démo des Tilleuls
+    jour: -72
+    lignes:
+      - { article: BIBLIO-MESURE, quantite: 1 }
+      - { article: ETUDE-PLAN, quantite: 1 }
+    # Impayée et échue : à relancer.
+  - cle: FV-3
+    client: Agence Démo Architecture Intérieure
+    jour: -60
+    lignes: [{ article: CHAISE-CHENE, quantite: 6 }]
+    paiement: { jour: -30, reference: VIR-ARCHI-1 }
+  - cle: FV-4
+    client: Mairie de Démoville
+    jour: -50
+    lignes:
+      - { article: BIBLIO-MESURE, quantite: 2 }
+      - { article: POSE, quantite: 8 }
+    # Impayée et échue : à relancer.
+  - cle: FV-5
+    client: Cabinet Démo Dentaire
+    jour: -40
+    lignes:
+      - { article: TABLE-CHENE, quantite: 1 }
+      - { article: LIVRAISON, quantite: 1 }
+    # Acompte seulement : le reste est échu.
+    paiement: { jour: -12, montant: 800.00, reference: VIR-DENTAIRE-ACOMPTE }
+  - cle: FV-6
+    client: Jean Démo
+    jour: -25
+    lignes:
+      - { article: CHAISE-CHENE, quantite: 2 }
+      - { article: LIVRAISON, quantite: 1 }
+  - cle: FV-7
+    client: Restaurant Démo Le Chêne Vert
+    jour: -15
+    lignes: [{ article: CHAISE-CHENE, quantite: 8 }]
+    # Payée selon le relevé bancaire, mais le paiement n'est pas encore saisi.
+  - cle: FV-8
+    client: Hôtel Démo des Tilleuls
+    jour: -8
+    lignes: [{ article: POSE, quantite: 6 }]
+
+# Factures électroniques reçues (générées par demo/einvoices/generate.py), importées par
+# le chemin de réception d'eTransactions : elles deviennent des « factures fournisseurs »
+# à traiter.
+factures_recues:
+  - cle: FR-1
+    fournisseur: Scierie Démo du Jura
+    numero: SDJ-2026-0187
+    jour: -60
+    commande: CA-1                 # conforme à la commande et à la réception
+    syntaxe: CII
+    lignes: [{ article: PLANCHE-CHENE, ref_fournisseur: CH27-MASSIF, quantite: 20, prix: 45.00 }]
+  - cle: FR-2
+    fournisseur: Panneaux Démo Bois
+    numero: PDB-11872
+    jour: -38
+    commande: CA-2
+    syntaxe: CII
+    # Écart de prix : 42,00 € facturés contre 38,50 € commandés.
+    lignes: [{ article: PANNEAU-CP18, ref_fournisseur: CP-BOU-18, quantite: 15, prix: 42.00 }]
+  - cle: FR-3
+    fournisseur: Quincaillerie Démo Pro
+    numero: QDP-F-30512
+    jour: -24
+    commande: CA-3                 # facture toute la commande, vis non reçues
+    syntaxe: CII
+    lignes:
+      - { article: CHARNIERE-INV, ref_fournisseur: CHI-35-L10, quantite: 10, prix: 24.00 }
+      - { article: VIS-INOX, ref_fournisseur: VX440-B500, quantite: 4, prix: 18.90 }
+  - cle: FR-4
+    fournisseur: Transports Démo Express
+    numero: TDE-2026-0944
+    jour: -5
+    syntaxe: CII
+    # Prestation sans commande.
+    lignes: [{ ref_fournisseur: TRANSP-REG, designation: Transport de bois Champagnole - Lons, quantite: 1, prix: 185.00 }]
+  - cle: FR-5
+    fournisseur: Maintenance Machines Démo
+    numero: MMD-7731
+    jour: -3
+    syntaxe: UBL
+    # Prestation sans commande, au format UBL.
+    lignes: [{ ref_fournisseur: ENT-RABOT, designation: Entretien annuel de la raboteuse, quantite: 1, prix: 320.00 }]

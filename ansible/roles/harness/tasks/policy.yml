@@ -1,0 +1,214 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Builds, as data, everything that carries a security decision: the opencode rules, the
+# Claude Code settings, the MCP servers and the policies read by the two guards. The
+# templates only serialise these facts, so the decisions live in one place.
+
+- name: Keep the opencode version and the address of the MCP server
+  ansible.builtin.set_fact:
+    _harness_oc_version: "{{ dp.harness.opencode_version | default(harness_opencode_version) | int }}"
+    _harness_mcp_url: "{{ _harness_dokos_url ~ harness_dokos_mcp_path }}"
+    _harness_dokos_prefix: "{{ harness_dokos_server ~ '_' }}"
+    _harness_mail_prefix: "{{ harness_mail_server ~ '_' }}"
+    _harness_calendar_prefix: "{{ harness_calendar_server ~ '_' }}"
+
+- name: Build the opencode rules that close every rule list
+  ansible.builtin.set_fact:
+    _harness_oc_guard_rules: >-
+      {{ harness_oc_protect_rules
+         + (harness_dokos_denied_tools | dokopilot_rules('deny', prefix=_harness_dokos_prefix))
+         + (harness_mail_denied_tools | dokopilot_rules('deny', prefix=_harness_mail_prefix))
+         + (harness_calendar_denied_tools | dokopilot_rules('deny', prefix=_harness_calendar_prefix)) }}
+
+- name: Build the opencode rules of the workspace and of the two agents
+  ansible.builtin.set_fact:
+    _harness_oc_global_rules: >-
+      {{ harness_oc_base_rules
+         + (['*'] | dokopilot_rules('ask', prefix=_harness_dokos_prefix))
+         + (harness_dokos_read_tools | dokopilot_rules('allow', prefix=_harness_dokos_prefix))
+         + (harness_dokos_draft_tools | dokopilot_rules('ask', prefix=_harness_dokos_prefix))
+         + ((['*'] | dokopilot_rules('ask', prefix=_harness_mail_prefix))
+            + (harness_mail_read_tools | dokopilot_rules('allow', prefix=_harness_mail_prefix))
+            + (harness_mail_draft_tools | dokopilot_rules('ask', prefix=_harness_mail_prefix))
+            if dp.harness.mail.enabled else [])
+         + ((['*'] | dokopilot_rules('ask', prefix=_harness_calendar_prefix))
+            + (harness_calendar_read_tools | dokopilot_rules('allow', prefix=_harness_calendar_prefix))
+            + (harness_calendar_write_tools | dokopilot_rules('ask', prefix=_harness_calendar_prefix))
+            if dp.harness.calendar.enabled else [])
+         + _harness_oc_guard_rules }}
+    _harness_oc_bureau_rules: "{{ _harness_oc_guard_rules }}"
+    _harness_oc_atelier_rules: "{{ harness_oc_atelier_rules + _harness_oc_guard_rules }}"
+
+- name: Describe the environment of the calendar connector (no password here)
+  ansible.builtin.set_fact:
+    _harness_calendar_env: >-
+      {{ {'CALDAV_URL': dp.harness.calendar.caldav_url,
+          'CALDAV_USERNAME': dp.harness.calendar.username,
+          'CALDAV_TIMEZONE': dp.client.timezone,
+          'CALDAV_USER_EMAIL': dp.harness.calendar.email | default(dp.users.entrepreneur.email, true),
+          'CALDAV_READ_ONLY': 'false',
+          'CALDAV_DENY_TOOLS': harness_calendar_denied_tools | join(',')}
+         | combine({'CALDAV_CALENDARS': dp.harness.calendar.calendars | default([]) | join(',')}
+                   if dp.harness.calendar.calendars | default([]) | length > 0 else {}) }}
+
+- name: Build the opencode configuration
+  vars:
+    # Secrets are referenced with {file:...}: opencode reads them when it loads its
+    # configuration and passes them to the MCP connection or process only.
+    _base:
+      dokos:
+        type: remote
+        url: "{{ _harness_mcp_url }}"
+        oauth: false
+        headers:
+          Authorization: "{{ 'token {file:' ~ harness_token_file ~ '}' }}"
+      mail:
+        type: local
+        command: "{{ [harness_mail_mcp_command, harness_mail_mcp_package, 'stdio'] }}"
+        environment:
+          MCP_EMAIL_SERVER_CONFIG_PATH: "{{ harness_mail_config_file }}"
+      calendar:
+        type: local
+        command: "{{ [harness_calendar_mcp_command, '-y', harness_calendar_mcp_package] }}"
+        environment: "{{ _harness_calendar_env | combine({'CALDAV_PASSWORD': '{file:' ~ harness_calendar_password_file ~ '}'}) }}"
+    _names: >-
+      {{ [harness_dokos_server]
+         + ([harness_mail_server] if dp.harness.mail.enabled else [])
+         + ([harness_calendar_server] if dp.harness.calendar.enabled else []) }}
+    # V2: tools exposed directly (no Code Mode), so that each one has its own rule.
+    _servers_v2: "{{ dict(_names | zip(_names | map('extract', _base) | map('combine', {'codemode': false}))) }}"
+    # V1: no Code Mode, and `enabled` instead of `disabled`.
+    _servers_v1: "{{ dict(_names | zip(_names | map('extract', _base) | map('combine', {'enabled': true}))) }}"
+  ansible.builtin.set_fact:
+    _harness_opencode_config: >-
+      {{ {'$schema': 'https://opencode.ai/config.json',
+          'default_agent': 'bureau',
+          'share': 'disabled',
+          'mcp': {'servers': _servers_v2},
+          'permissions': _harness_oc_global_rules,
+          'agents': dict(harness_oc_disabled_agents | product([{'disabled': true}]))}
+         if _harness_oc_version == 2 else
+         {'$schema': 'https://opencode.ai/config.json',
+          'default_agent': 'bureau',
+          'share': 'disabled',
+          'mcp': _servers_v1,
+          'permission': _harness_oc_global_rules | dokopilot_opencode_v1,
+          'agent': dict(harness_oc_disabled_agents | product([{'disable': true}]))} }}
+
+- name: Build the policy of the opencode guard plugin
+  ansible.builtin.set_fact:
+    _harness_oc_guard_policy:
+      mail_prefix: "{{ _harness_mail_prefix }}"
+      mail_server: "{{ harness_mail_server }}"
+      safe_actions: >-
+        {{ harness_oc_safe_actions
+           + (harness_dokos_read_tools | map('regex_replace', '^', _harness_dokos_prefix) | list)
+           + (harness_mail_read_tools | map('regex_replace', '^', _harness_mail_prefix) | list)
+           + (harness_calendar_read_tools | map('regex_replace', '^', _harness_calendar_prefix) | list) }}
+      always_ask: >-
+        {{ (harness_dokos_draft_tools | map('regex_replace', '^', _harness_dokos_prefix) | list)
+           + (harness_mail_draft_tools | map('regex_replace', '^', _harness_mail_prefix) | list)
+           + (harness_calendar_write_tools | map('regex_replace', '^', _harness_calendar_prefix) | list) }}
+      v1_blocked_when_exposed: "{{ harness_oc_v1_blocked_tools }}"
+
+- name: Build the MCP servers of Claude Code
+  vars:
+    _hooks_dir: "{{ harness_dest }}/.claude/hooks"
+    _servers:
+      dokos:
+        type: http
+        url: "{{ _harness_mcp_url }}"
+        # Runs outside the Bash sandbox, at connection time, after the workspace is trusted:
+        # the token is read from its private file and never enters any environment.
+        headersHelper: "python3 {{ (_hooks_dir ~ '/dokos_headers.py') | quote }} {{ harness_token_file | quote }}"
+      mail:
+        type: stdio
+        command: "{{ harness_mail_mcp_command }}"
+        args: "{{ [harness_mail_mcp_package, 'stdio'] }}"
+        env:
+          MCP_EMAIL_SERVER_CONFIG_PATH: "{{ harness_mail_config_file }}"
+      calendar:
+        type: stdio
+        command: python3
+        args: >-
+          {{ [_hooks_dir ~ '/caldav_launcher.py', harness_calendar_password_file,
+              harness_calendar_mcp_command, '-y', harness_calendar_mcp_package] }}
+        env: "{{ _harness_calendar_env }}"
+  ansible.builtin.set_fact:
+    _harness_claude_mcp:
+      mcpServers: >-
+        {{ {'dokos': _servers.dokos}
+           | combine({'mail': _servers.mail} if dp.harness.mail.enabled else {})
+           | combine({'calendar': _servers.calendar} if dp.harness.calendar.enabled else {}) }}
+
+- name: Build the settings and the guard policy of Claude Code
+  vars:
+    _hooks_dir: "{{ harness_dest }}/.claude/hooks"
+    _dokos: "mcp__{{ harness_dokos_server }}__"
+    _mail: "mcp__{{ harness_mail_server }}__"
+    _cal: "mcp__{{ harness_calendar_server }}__"
+    _guard_hook:
+      type: command
+      command: python3
+      args:
+        - "{{ _hooks_dir }}/mail_taint_guard.py"
+        - --state-dir
+        - "{{ harness_taint_dir }}"
+        - --policy
+        - "{{ _hooks_dir }}/guard-policy.json"
+      timeout: 30
+      onFailure: block
+  ansible.builtin.set_fact:
+    _harness_claude_settings:
+      $schema: https://json.schemastore.org/claude-code-settings.json
+      agent: bureau
+      permissions:
+        defaultMode: default
+        disableBypassPermissionsMode: disable
+        allow: >-
+          {{ (harness_dokos_read_tools | map('regex_replace', '^', _dokos) | list)
+             + ((harness_mail_read_tools | map('regex_replace', '^', _mail) | list) if dp.harness.mail.enabled else [])
+             + ((harness_calendar_read_tools | map('regex_replace', '^', _cal) | list) if dp.harness.calendar.enabled else [])
+             + ['Edit(/**)'] }}
+        ask: >-
+          {{ (harness_dokos_draft_tools | map('regex_replace', '^', _dokos) | list)
+             + ((harness_mail_draft_tools | map('regex_replace', '^', _mail) | list) if dp.harness.mail.enabled else [])
+             + ((harness_calendar_write_tools | map('regex_replace', '^', _cal) | list) if dp.harness.calendar.enabled else [])
+             + ['WebFetch', 'WebSearch', 'Edit(/AGENTS.md)'] }}
+        deny: >-
+          {{ (harness_dokos_denied_tools | map('regex_replace', '^', _dokos) | list)
+             + (harness_mail_denied_tools | map('regex_replace', '^', _mail) | list)
+             + (harness_calendar_denied_tools | map('regex_replace', '^', _cal) | list)
+             + harness_claude_protect_rules }}
+      enabledMcpjsonServers: >-
+        {{ [harness_dokos_server]
+           + ([harness_mail_server] if dp.harness.mail.enabled else [])
+           + ([harness_calendar_server] if dp.harness.calendar.enabled else []) }}
+      hooks:
+        # PreToolUse: every tool (taint check, Bureau confirmations, mail reads marked before
+        # they run). PostToolUse: mail tools, marked again once they ran. Fail closed.
+        PreToolUse:
+          - matcher: "*"
+            hooks: "{{ [_guard_hook] }}"
+        PostToolUse:
+          - matcher: "{{ _mail }}.*"
+            hooks: "{{ [_guard_hook] }}"
+      sandbox:
+        enabled: true
+        allowUnsandboxedCommands: false
+        failIfUnavailable: "{{ harness_claude_sandbox_required | bool }}"
+        filesystem:
+          denyRead: ["{{ harness_config_root }}"]
+          denyWrite: ["{{ harness_config_root }}", ./.opencode, ./opencode.json, ./.agents, ./AGENTS.md, ./CLAUDE.md]
+        network:
+          allowedDomains: ["{{ _harness_dokos_host }}"]
+    _harness_claude_guard_policy:
+      mail_prefix: "{{ _mail }}"
+      mail_server: "{{ harness_mail_server }}"
+      atelier_agent: atelier
+      main_session_agents: [bureau, atelier]
+      safe_tools: >-
+        {{ harness_claude_safe_tools
+           + (harness_dokos_read_tools | map('regex_replace', '^', _dokos) | list)
+           + (harness_mail_read_tools | map('regex_replace', '^', _mail) | list)
+           + (harness_calendar_read_tools | map('regex_replace', '^', _cal) | list) }}
+      confirm_in_bureau: "{{ harness_claude_bureau_confirm_tools }}"

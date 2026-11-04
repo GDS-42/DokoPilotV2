@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Layered on clients/demo/client.yml by run.sh: both harnesses, mail and calendar on.
+# The public key is a throwaway test key, not a secret; the hosts do not exist.
+maintenance:
+  users:
+    - name: integrateur
+      ssh_public_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICdlz24XChizBwhFPp6gSD44SkpfKjNkaDkSJAQyvIlB test@example"]
+  sudo_requires_password: true
+
+harness:
+  default: opencode
+  enabled: [opencode, claude-code]
+  mail:
+    enabled: true
+    imap_host: imap.example.test
+    smtp_host: smtp.example.test
+    username: camille.martin@atelier-demo.test
+  calendar:
+    enabled: true
+    caldav_url: https://dav.example.test/remote.php/dav
+    username: camille.martin

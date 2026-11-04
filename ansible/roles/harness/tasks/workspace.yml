@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Installs the workspace files without ever losing a local change. Each file is rendered
+# into a staging copy (~/.config/dokopilot/<client>/rendered), which also remembers what the
+# previous run installed. When the file in the workspace differs both from the new version
+# and from what the previous run installed, the entrepreneur changed it: it is kept as
+# <file>.<date>.bak before the new version replaces it.
+
+- name: List the files of the workspace
+  vars:
+    _wanted: "{{ ['all'] + dp.harness.enabled }}"
+    _skill_dirs: >-
+      {{ (['.agents/skills'] if 'opencode' in dp.harness.enabled else [])
+         + (['.claude/skills'] if 'claude-code' in dp.harness.enabled else []) }}
+    _skill_dests: "{{ _skill_dirs | product(harness_skills) | map('join', '/') | map('regex_replace', '$', '/SKILL.md') | list }}"
+    _skill_srcs: >-
+      {{ _skill_dirs | product(harness_skills) | map('last')
+         | map('regex_replace', '^', 'skills/') | map('regex_replace', '$', '/SKILL.md') | list }}
+  ansible.builtin.set_fact:
+    _harness_files: >-
+      {{ (harness_workspace_files | selectattr('harness', 'in', _wanted) | list)
+         + (dict(_skill_dests | zip(_skill_srcs)) | dict2items(key_name='dest', value_name='src')
+            | map('combine', {'template': false}) | list) }}
+    _harness_run_stamp: "{{ now(fmt='%Y%m%d-%H%M%S') }}"
+    _harness_backups: []
+
+- name: Create the workspace and staging folders
+  vars:
+    _dirs: "{{ _harness_files | map(attribute='dest') | map('dirname') | reject('equalto', '') | unique | list }}"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop: >-
+    {{ [harness_dest]
+       + (_dirs | map('regex_replace', '^', harness_dest ~ '/') | list)
+       + (_dirs | map('regex_replace', '^', harness_staging_dir ~ '/') | list) }}
+
+- name: Look at the workspace files already on this computer
+  ansible.builtin.stat:
+    path: "{{ harness_dest }}/{{ item.dest }}"
+  loop: "{{ _harness_files }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  register: _harness_dest_stat
+
+- name: Look at the copies installed by the previous run
+  ansible.builtin.stat:
+    path: "{{ harness_staging_dir }}/{{ item.dest }}"
+  loop: "{{ _harness_files }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  register: _harness_prev_stat
+
+- name: Render the templated files into the staging folder
+  ansible.builtin.template:
+    src: "{{ harness_source_dir }}/{{ item.src }}"
+    dest: "{{ harness_staging_dir }}/{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+  loop: "{{ _harness_files }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  when: item.template | default(true) | bool
+
+- name: Copy the static files into the staging folder
+  ansible.builtin.copy:
+    src: "{{ harness_source_dir }}/{{ item.src }}"
+    dest: "{{ harness_staging_dir }}/{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+  loop: "{{ _harness_files }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  when: not (item.template | default(true) | bool)
+
+- name: Look at the new versions
+  ansible.builtin.stat:
+    path: "{{ harness_staging_dir }}/{{ item.dest }}"
+  loop: "{{ _harness_files }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  register: _harness_new_stat
+
+- name: Find the files changed on this computer since the previous run
+  vars:
+    _dest: "{{ _harness_dest_stat.results[_harness_index].stat }}"
+    _prev: "{{ _harness_prev_stat.results[_harness_index].stat }}"
+    _new: "{{ _harness_new_stat.results[_harness_index].stat }}"
+  ansible.builtin.set_fact:
+    _harness_backups: "{{ _harness_backups + [item.dest] }}"
+  loop: "{{ _harness_files }}"
+  loop_control:
+    index_var: _harness_index
+    label: "{{ item.dest }}"
+  when:
+    - _dest.exists
+    - _dest.checksum | default('') != _new.checksum | default('')
+    - not _prev.exists or _dest.checksum | default('') != _prev.checksum | default('')
+
+- name: Keep a copy of the files changed on this computer
+  ansible.builtin.copy:
+    src: "{{ harness_dest }}/{{ item }}"
+    dest: "{{ harness_dest }}/{{ item }}.{{ _harness_run_stamp }}.bak"
+    remote_src: true
+    mode: "0600"
+  loop: "{{ _harness_backups }}"
+
+- name: Install the new versions in the workspace
+  ansible.builtin.copy:
+    src: "{{ harness_staging_dir }}/{{ item.dest }}"
+    dest: "{{ harness_dest }}/{{ item.dest }}"
+    remote_src: true
+    mode: "{{ item.mode | default('0644') }}"
+  loop: "{{ _harness_files }}"
+  loop_control:
+    label: "{{ item.dest }}"

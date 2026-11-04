@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Runs on the server (play 1 of harness.yml): reads the token of the entrepreneur's assistant
+# user and, in tailscale mode, the MagicDNS name. Nothing is changed on the server.
+# Contract with the Dokos provisioning: /etc/dokopilot/assistants/<assistant email>.json,
+# root 0600, {"user": "...", "api_key": "...", "api_secret": "..."}.
+
+- name: Find the assistant user of the entrepreneur
+  ansible.builtin.set_fact:
+    _harness_assistant_email: >-
+      {{ dp.users.assistants | selectattr('for', 'equalto', dp.users.entrepreneur.email)
+         | map(attribute='email') | first | default('') }}
+
+- name: Check that the entrepreneur has an assistant user
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _harness_assistant_email | length > 0
+    fail_msg: >-
+      Aucun utilisateur assistant n'est déclaré pour {{ dp.users.entrepreneur.email }} :
+      ajoutez-le dans users.assistants (client.yml), lancez « bin/dokopilot install
+      {{ dp.client.id }} », puis relancez « bin/dokopilot harness {{ dp.client.id }} ».
+
+- name: Read the credentials of the assistant user on the server
+  ansible.builtin.slurp:
+    src: "{{ harness_server_credentials_dir }}/{{ _harness_assistant_email }}.json"
+  become: true
+  register: _harness_credentials_file
+  no_log: true
+
+- name: Keep the credentials in memory for the workstation play
+  ansible.builtin.set_fact:
+    _harness_server_credentials: "{{ _harness_credentials_file.content | b64decode | from_json }}"
+  no_log: true
+
+- name: Read the MagicDNS name of the server
+  ansible.builtin.command:
+    cmd: tailscale status --json
+  become: true
+  register: _harness_tailscale_status
+  changed_when: false
+  check_mode: false
+  when:
+    - dp.network.mode == 'tailscale'
+    - harness_tailscale_dns_name is not defined
+
+- name: Keep the MagicDNS name for the workstation play
+  ansible.builtin.set_fact:
+    _harness_server_dns_name: "{{ (_harness_tailscale_status.stdout | from_json).Self.DNSName | default('') }}"
+  when:
+    - dp.network.mode == 'tailscale'
+    - harness_tailscale_dns_name is not defined

@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Calendar connector (@ni-c/caldav-mcp): the CalDAV password is typed by the entrepreneur on
+# this computer once, then kept in ~/.config/dokopilot/<client>. opencode reads it with its
+# {file:...} substitution, Claude Code through .claude/hooks/caldav_launcher.py.
+
+- name: Check whether the CalDAV password is already stored on this computer
+  ansible.builtin.stat:
+    path: "{{ harness_calendar_password_file }}"
+  register: _harness_calendar_password_stat
+
+- name: Ask the entrepreneur for the CalDAV password
+  ansible.builtin.pause:
+    prompt: >-
+      Mot de passe de l'agenda {{ dp.harness.calendar.username }} sur {{ dp.harness.calendar.caldav_url }}
+      (mot de passe d'application conseillé ; la saisie reste masquée)
+    echo: false
+  register: _harness_calendar_password_prompt
+  no_log: true
+  when:
+    - not _harness_calendar_password_stat.stat.exists
+    - harness_calendar_password is not defined
+
+- name: Store the CalDAV password on this computer
+  ansible.builtin.copy:
+    content: "{{ harness_calendar_password if harness_calendar_password is defined else _harness_calendar_password_prompt.user_input }}"
+    dest: "{{ harness_calendar_password_file }}"
+    mode: "0600"
+  no_log: true
+  when: not _harness_calendar_password_stat.stat.exists
+
+- name: Check whether the stored CalDAV password is empty
+  ansible.builtin.set_fact:
+    _harness_calendar_password_ok: "{{ lookup('ansible.builtin.file', harness_calendar_password_file, rstrip=false) | length > 0 }}"
+  no_log: true
+
+- name: Refuse an empty CalDAV password
+  ansible.builtin.fail:
+    msg: >-
+      Le mot de passe d'agenda enregistré est vide : supprimez
+      {{ harness_calendar_password_file }}, puis relancez « bin/dokopilot harness {{ dp.client.id }} ».
+  when: not _harness_calendar_password_ok | bool

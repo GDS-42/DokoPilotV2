@@ -1,0 +1,4 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Serialises the fact named by item.data. The facts are built, with every security
+    decision they carry, in ansible/roles/harness/tasks/policy.yml. -#}
+{{ lookup('ansible.builtin.vars', item.data) | to_nice_json(indent=2, sort_keys=False) }}

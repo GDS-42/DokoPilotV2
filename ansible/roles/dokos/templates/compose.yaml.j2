@@ -1,0 +1,187 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later #}
+# Managed by DokoPilot (Ansible): local changes are overwritten.
+# Layout of frappe_docker (compose.yaml + mariadb and redis overrides), with Valkey,
+# pinned images, an internal network for the database and the cache, and a frontend
+# published on 127.0.0.1 only. The site is created by Ansible, not by a container.
+name: {{ dokopilot_compose_project }}
+
+x-bench: &bench
+  image: {{ dokos_image }}
+  pull_policy: never
+  platform: linux/amd64
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  volumes:
+    - sites:/home/frappe/frappe-bench/sites
+    - logs:/home/frappe/frappe-bench/logs
+  networks:
+    - internal
+    - egress
+  depends_on:
+    db:
+      condition: service_healthy
+    valkey-cache:
+      condition: service_healthy
+    valkey-queue:
+      condition: service_healthy
+
+services:
+  # One-shot: writes the bench settings (database, cache, queues) into
+  # sites/common_site_config.json. Run by Ansible with `docker compose run`, not by `up`.
+  configurator:
+    <<: *bench
+    profiles: [setup]
+    restart: "no"
+    depends_on: {}
+    networks: [internal]
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - ./provisioning:/opt/dokopilot/provisioning:ro
+    entrypoint: ["/home/frappe/frappe-bench/env/bin/python", "/opt/dokopilot/provisioning/configure_bench.py"]
+    command: []
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      REDIS_CACHE: redis://valkey-cache:6379
+      REDIS_QUEUE: redis://valkey-queue:6379
+      SOCKETIO_PORT: "9000"
+      CHROMIUM_PATH: /usr/lib/chromium/chromium-headless-shell
+
+  backend:
+    <<: *bench
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - ./provisioning:/opt/dokopilot/provisioning:ro
+      - ./demo:/opt/dokopilot/demo:ro
+      - {{ dokopilot_bench_backup_dir }}:/home/frappe/backups
+    environment:
+      GUNICORN_WORKERS: "{{ dokos_gunicorn_workers }}"
+      GUNICORN_THREADS: "{{ dokos_gunicorn_threads }}"
+      GUNICORN_TIMEOUT: "{{ dokos_gunicorn_timeout }}"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  frontend:
+    <<: *bench
+    command: ["nginx-entrypoint.sh"]
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      NGINX_LISTEN_PORT: "8080"
+      # Every request reaches the one site, whatever host name the proxy forwards.
+      FRAPPE_SITE_NAME_HEADER: {{ dp.dokos.site_name }}
+      UPSTREAM_REAL_IP_ADDRESS: {{ dokos_upstream_real_ip_from }}
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: "{{ dokos_gunicorn_timeout }}"
+      CLIENT_MAX_BODY_SIZE: {{ dokos_client_max_body_size }}
+    ports:
+      # Loopback only: the host's proxy (Caddy in lan mode, tailscale serve) publishes it.
+      - "127.0.0.1:{{ dokopilot_dokos_http_port }}:8080"
+    depends_on:
+      backend:
+        condition: service_started
+      websocket:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  websocket:
+    <<: *bench
+    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  queue-short:
+    <<: *bench
+    command: ["bench", "worker", "--queue", "short,default"]
+
+  queue-long:
+    <<: *bench
+    command: ["bench", "worker", "--queue", "long,default,short"]
+
+  scheduler:
+    <<: *bench
+    command: ["bench", "schedule"]
+
+  db:
+    image: {{ dokos_mariadb_image }}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --innodb-snapshot-isolation=OFF
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is missing from .env}
+      MARIADB_AUTO_UPGRADE: "1"
+    volumes:
+      - db-data:/var/lib/mysql
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  valkey-cache:
+    image: {{ dokos_valkey_image }}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # Cache only: nothing is written to disk.
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  valkey-queue:
+    image: {{ dokos_valkey_image }}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: ["valkey-server", "--appendonly", "yes"]
+    volumes:
+      - valkey-queue-data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+networks:
+  # Database, cache and queues: no route to the outside.
+  internal:
+    internal: true
+  # Outgoing connections of Dokos (e-invoicing platform, AI providers) and the
+  # published frontend port.
+  egress: {}
+
+volumes:
+  sites:
+  logs:
+  db-data:
+  valkey-queue-data:

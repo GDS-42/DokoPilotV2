@@ -1,0 +1,68 @@
+# syntax=docker/dockerfile:1
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Thin image on top of the official, unmodified Dokos image: it only adds the
+# Dokos AI app at a pinned tag, with its assets. No upstream file is changed.
+# Every version comes from ansible/roles/dokos/defaults/main.yml (build args).
+#
+# Optional build secret `build_ca`: an extra CA bundle, for builds behind a
+# TLS-intercepting proxy (used by the test suite only). It is mounted for the
+# one RUN step that downloads, and never stored in the image.
+
+ARG DOKOS_BASE_IMAGE=registry.gitlab.com/dokos/dokos:v5.18.11@sha256:e993e4d98bdb636985d09e783dab1cf46db407c81dbd8f60628c4719f58e3741
+FROM ${DOKOS_BASE_IMAGE}
+
+ARG DOKOS_AI_REPO=https://gitlab.com/dokos/dokos-ai
+ARG DOKOS_AI_TAG=v1.14.0
+ARG DOKOS_AI_COMMIT=8183f1542088a10ebe7e60b78582f145cf9ac934
+ARG DOKOPILOT_BUILD_ID=unset
+
+USER frappe
+WORKDIR /home/frappe/frappe-bench
+
+# bench get-app clones the tag, installs the Python package (uv) and the Node
+# dependencies, then builds the assets. The official image keeps its built assets
+# in /home/frappe/frappe-bench/assets and links sites/assets to it at start
+# (entrypoint.sh), so the build writes through the same link.
+RUN --mount=type=secret,id=build_ca,uid=1000,gid=0,required=false \
+    set -eu; \
+    if [ -s /run/secrets/build_ca ]; then \
+      export SSL_CERT_FILE=/run/secrets/build_ca GIT_SSL_CAINFO=/run/secrets/build_ca \
+             REQUESTS_CA_BUNDLE=/run/secrets/build_ca NODE_EXTRA_CA_CERTS=/run/secrets/build_ca \
+             PIP_CERT=/run/secrets/build_ca; \
+    fi; \
+    test ! -e apps/dokos_ai; \
+    ln -sfn /home/frappe/frappe-bench/assets sites/assets; \
+    export FRAPPE_DOCKER_BUILD=1; \
+    bench get-app --branch "${DOKOS_AI_TAG}" "${DOKOS_AI_REPO}"; \
+    actual="$(git -C apps/dokos_ai rev-parse HEAD)"; \
+    if [ "${actual}" != "${DOKOS_AI_COMMIT}" ]; then \
+      echo "dokos_ai ${DOKOS_AI_TAG} is commit ${actual}, expected ${DOKOS_AI_COMMIT}" >&2; exit 1; \
+    fi; \
+    test -f apps/dokos_ai/dokos_ai/www/dokosai/index.html; \
+    test -e assets/dokos_ai; \
+    grep -qx dokos_ai sites/apps.txt; \
+    rm -rf apps/dokos_ai/.git apps/dokos_ai/node_modules apps/dokos_ai/frontend/node_modules \
+           /home/frappe/.cache /home/frappe/.npm /home/frappe/.yarn /home/frappe/.config/yarn; \
+    rm -f sites/assets; \
+    chmod -R g=u apps/dokos_ai
+
+# Record what was installed, and the dependency check, inside the image.
+# The click downgrade required by litellm (dokos_ai) against Dodock's Click~=8.3.1
+# is accepted as upstream's own CI does: pip check is recorded, not enforced.
+RUN set -eu; \
+    mkdir -p /home/frappe/frappe-bench/.dokopilot; \
+    cd /home/frappe/frappe-bench; \
+    (env/bin/python -m pip check > .dokopilot/pip-check.txt 2>&1 || true); \
+    env/bin/python -c "import frappe, erpnext, etransactions, dokos_ai, payments; print(frappe.__version__, erpnext.__version__, etransactions.__version__, dokos_ai.__version__)" > .dokopilot/versions.txt; \
+    printf '{"build_id": "%s", "dokos_ai_tag": "%s", "dokos_ai_commit": "%s"}\n' \
+      "${DOKOPILOT_BUILD_ID}" "${DOKOS_AI_TAG}" "${DOKOS_AI_COMMIT}" > .dokopilot/build-info.json; \
+    bench --help > /dev/null; \
+    cat .dokopilot/versions.txt .dokopilot/pip-check.txt
+
+LABEL org.opencontainers.image.title="DokoPilot Dokos" \
+      org.opencontainers.image.description="Official Dokos image plus the Dokos AI app, unmodified" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      io.dokopilot.dokos-ai.tag="${DOKOS_AI_TAG}" \
+      io.dokopilot.dokos-ai.commit="${DOKOS_AI_COMMIT}" \
+      io.dokopilot.build-id="${DOKOPILOT_BUILD_ID}"

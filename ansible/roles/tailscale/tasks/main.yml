@@ -2,6 +2,11 @@
 # Tailscale: installation, first connection with a one-time auth key, and the facts used by
 # the proxy role and the final summary (dokopilot_tailscale_ip, dokopilot_tailscale_dnsname).
 
+- name: Install the module needed to manage deb822 repository files
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+
 - name: Install the Tailscale repository signing key
   ansible.builtin.copy:
     src: "{{ tailscale_keyring_src }}"

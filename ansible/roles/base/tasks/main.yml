@@ -76,11 +76,13 @@
     group: root
     mode: "0644"
 
+# In a container (some VPS are), the clock belongs to the host: systemd-timesyncd's own
+# ConditionVirtualization=!container keeps it from starting there.
 - name: Keep the clock synchronised
   ansible.builtin.systemd_service:
     name: systemd-timesyncd
     enabled: true
-    state: started
+    state: "{{ omit if 'container' in ansible_facts['virtualization_tech_guest'] | default([]) else 'started' }}"
 
 - name: Enable the periodic package updates
   ansible.builtin.template:
@@ -104,6 +106,11 @@
     enabled: true
     state: started
 
+- name: Check whether the kernel has IPv6 (some hosting providers boot with ipv6.disable=1)
+  ansible.builtin.stat:
+    path: /proc/sys/net/ipv6
+  register: _base_ipv6
+
 - name: Harden the kernel settings
   ansible.posix.sysctl:
     name: "{{ item.key }}"
@@ -111,7 +118,9 @@
     sysctl_file: "{{ base_sysctl_file }}"
     sysctl_set: true
     state: present
-  loop: "{{ base_sysctl | dict2items }}"
+  loop: >-
+    {{ base_sysctl | dict2items if _base_ipv6.stat.exists
+       else base_sysctl | dict2items | rejectattr('key', 'match', 'net\.ipv6\.') | list }}
   loop_control:
     label: "{{ item.key }}"
 

@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Dokos stack: derived image, Docker Compose project, site.
+# Every external version is pinned here (tag and digest); change them only together
+# with the procedure of docs/exploitation.md (« Mettre à jour Dokos »).
+
+# --- Paths and names shared by the dokos, dokos_config, demo_data and backup roles
+# (the same defaults are repeated in each role; override them together).
+dokopilot_stack_dir: /opt/dokopilot/stack
+dokopilot_compose_project: dokopilot
+dokopilot_etc_dir: /etc/dokopilot
+# Host directory mounted in the backend container for `bench backup` and restores.
+dokopilot_bench_backup_dir: /var/lib/dokopilot/bench-backups
+# Fallback when the config role does not define it: the frontend publishes on
+# 127.0.0.1 only, on this port.
+dokopilot_dokos_http_port: 8080
+
+# --- Official Dokos image (amd64 only). Tag v5.18.11 = Dokos 5.18.11, Dodock 5.18.9,
+# payments 3.10.3, etransactions 2.17.0 (recorded in the image's sites/apps.json).
+dokos_base_image: registry.gitlab.com/dokos/dokos
+dokos_version: v5.18.11
+dokos_base_digest: sha256:e993e4d98bdb636985d09e783dab1cf46db407c81dbd8f60628c4719f58e3741
+
+# --- Dokos AI, added by stack/image/Containerfile (`bench get-app`). The build fails if
+# the tag does not point to this commit.
+dokos_ai_repo: https://gitlab.com/dokos/dokos-ai
+dokos_ai_tag: v1.14.0
+dokos_ai_commit: 8183f1542088a10ebe7e60b78582f145cf9ac934
+
+# Name of the derived image; its tag is <dokos_version>-<hash of the build inputs>.
+dokos_image_name: dokopilot/dokos
+
+# Apps installed on the site (their required apps, such as payments, come with them).
+# Not installed on purpose: bank (bank sync only works on Dokos Cloud, D-11), hrms,
+# webshop; certification_caisse and the point of sale are out of scope (D-10).
+dokos_site_apps:
+  - erpnext
+  - etransactions
+  - dokos_ai
+
+# --- Database and cache (internal network only, never published)
+# MariaDB 11.8 LTS; Dodock supports 10.6 to 11.8 (frappe/database/mariadb/setup_db.py).
+dokos_mariadb_image: mariadb:11.8.9@sha256:c4124d1afa875e47f2892edf26b482fa54f796e2f342d3717a04ca091a22a9bd
+# Valkey 8 (BSD-3-Clause), Redis-compatible, for the cache and the job queue.
+dokos_valkey_image: valkey/valkey:8.1.11-alpine@sha256:2602ace2be6569bc2bbb06f873776516ab9089821525be34f4305c67eb9db02a
+
+# --- Sizing (gunicorn: 2 workers x 4 threads suits 2 vCPU; frappe_docker suggests 2 x cores + 1)
+dokos_gunicorn_workers: 2
+dokos_gunicorn_threads: 4
+dokos_gunicorn_timeout: 120
+dokos_client_max_body_size: 50m
+# Proxy in front of nginx (Caddy or tailscale serve on the host) reaches it through the
+# Docker bridge: trust X-Forwarded-For from the Docker address ranges only.
+dokos_upstream_real_ip_from: 172.16.0.0/12
+
+# --- Image build (on the server, only when the inputs change)
+# Optional extras for a build behind a proxy (used by tests/stack only):
+#   dokos_build_network: host
+#   dokos_build_args: { HTTPS_PROXY: "http://127.0.0.1:3128", NO_PROXY: "…" }
+#   dokos_build_ca_file: /path/to/ca-bundle.crt   (BuildKit secret, never stored in the image)
+dokos_build_network: ""
+dokos_build_args: {}
+dokos_build_ca_file: ""
+# Remove the BuildKit cache after a build (the disk of a small VPS is precious).
+dokos_build_prune: true
+
+# Seconds to wait for the containers to become healthy.
+dokos_wait_timeout: 600
+
+# Public address of Dokos for the links it generates (site config host_name). Empty:
+# computed from the network mode (lan: http://<server.address>; tailscale: the MagicDNS
+# name read from `tailscale status`).
+dokos_url: ""
+
+# Source of stack/ in this repository (image context and provisioning scripts).
+dokos_stack_src: "{{ role_path }}/../../../stack"

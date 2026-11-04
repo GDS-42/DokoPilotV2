@@ -1,0 +1,40 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- mcp-email-server 1.14.0, legacy TOML mode (docs/configuration.md). Strings are written
+    with to_json: a JSON string is a valid TOML basic string. Written with mode 0600. -#}
+{%- set tls = dp.harness.mail.imap_tls | default('ssl') -%}
+{%- set port = dp.harness.mail.imap_port | default(993 if tls == 'ssl' else 143) | int %}
+# Généré par DokoPilot (bin/dokopilot harness {{ dp.client.id }}) : fichier privé, contient le
+# mot de passe de la messagerie. Ne le copiez nulle part ; il est régénéré à chaque passage.
+#
+# Lecture et brouillons seulement : le compte n'accorde que la mutation « draft » et aucun
+# serveur d'envoi (SMTP) n'est configuré, donc aucun courriel ne peut partir d'ici. Les
+# brouillons sont enregistrés dans le dossier Brouillons et envoyés par l'entrepreneur
+# depuis sa messagerie habituelle.
+credential_storage = "plaintext"
+enable_attachment_download = false
+enable_attachment_content = false
+# Destinataires des brouillons : tous (l'envoi reste impossible, voir ci-dessus).
+allowed_recipients = ["*"]
+allowed_senders = []
+allowed_mutations = ["draft"]
+report_blocked_mutations = true
+
+[[emails]]
+account_name = "principal"
+full_name = {{ ((dp.users.entrepreneur.first_name ~ ' ' ~ dp.users.entrepreneur.last_name) | trim) | to_json }}
+email_address = {{ (dp.harness.mail.email | default(dp.harness.mail.username, true)) | to_json }}
+allowed_mutations = ["draft"]
+allow_protocol_commands = false
+save_to_sent = false
+{% if dp.harness.mail.drafts_mailbox | default('') | length > 0 %}
+drafts_mailbox = {{ dp.harness.mail.drafts_mailbox | to_json }}
+{% endif %}
+
+[emails.incoming]
+user_name = {{ dp.harness.mail.username | to_json }}
+password = {{ _harness_mail_password | to_json }}
+host = {{ dp.harness.mail.imap_host | to_json }}
+port = {{ port }}
+use_ssl = {{ 'true' if tls == 'ssl' else 'false' }}
+start_ssl = {{ 'true' if tls == 'starttls' else 'false' }}
+verify_ssl = true

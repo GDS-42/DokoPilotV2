@@ -28,8 +28,9 @@ lint: ## Vérifier YAML, rôles Ansible, scripts shell et Python
 	$(PY) -m py_compile bin/dokopilot
 
 .PHONY: test
-test: ## Tests rapides (configuration, CLI), sans serveur
+test: ## Tests rapides (configuration, harnais), sans serveur
 	tests/config/run.sh
+	tests/harness/run.sh
 
 .PHONY: test-system
 test-system: ## Rôles système contre un conteneur Debian 13 systemd (Docker requis)

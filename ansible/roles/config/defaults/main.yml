@@ -63,7 +63,6 @@ dokopilot_defaults:
     mail:
       enabled: false
       imap_host: ""
-      smtp_host: ""
       username: ""
     calendar:
       enabled: false

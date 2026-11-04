@@ -100,15 +100,23 @@ backup:
 harness:
   default: opencode             # opencode | claude-code
   enabled: [opencode, claude-code]
+  opencode_version: 2           # 2 (actuelle) ou 1 : forme de la configuration et de la garde
+  # Messagerie : lecture et brouillons seulement, aucun envoi possible (pas de SMTP).
   mail:
     enabled: false
     imap_host: ""
-    smtp_host: ""
+    imap_port: 993
+    imap_tls: ssl               # ssl (port 993) ou starttls (port 143)
     username: ""
+    email: ""                   # adresse affichée ; par défaut, username
+    drafts_mailbox: ""          # dossier des brouillons s'il n'est pas détecté (ex. "Brouillons")
+  # Agenda CalDAV : lecture ; création et modification d'événements sur accord.
   calendar:
     enabled: false
     caldav_url: ""
     username: ""
+    email: ""                   # par défaut, l'adresse de l'entrepreneur
+    calendars: []               # agendas autorisés ; vide = tous
 
 # Données de test (profil demo uniquement)
 demo:
