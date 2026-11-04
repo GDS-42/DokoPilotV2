@@ -6,6 +6,9 @@
 # envoi chiffré par restic de ces fichiers et de la configuration de la pile (sans son
 # .env), rétention, puis vérification rapide du dépôt. Lancée chaque jour par
 # {{ backup_unit_name }}.timer, ou à la demande : bin/dokopilot backup <client>.
+#   dokopilot-backup [--pre-restore]
+# --pre-restore : sauvegarde de l'état actuel juste avant une restauration, étiquetée
+# « dokopilot-pre-restore » (hors de la rétention quotidienne ; les 5 dernières sont gardées).
 set -euo pipefail
 umask 077
 
@@ -17,6 +20,13 @@ keep_daily={{ dp.backup.keep.daily | int }}
 keep_weekly={{ dp.backup.keep.weekly | int }}
 keep_monthly={{ dp.backup.keep.monthly | int }}
 {% raw %}
+
+tag=dokopilot
+case "${1:-}" in
+  "") ;;
+  --pre-restore) tag=dokopilot-pre-restore ;;
+  *) echo "Option inconnue : $1 (attendu : --pre-restore)" >&2; exit 2 ;;
+esac
 
 exec 9>/run/lock/dokopilot-backup.lock
 if ! flock -n 9; then
@@ -48,18 +58,22 @@ if (( ${#databases[@]} != 1 )); then
 fi
 
 echo "Envoi vers le dépôt restic…"
-restic backup --quiet --tag dokopilot --tag "site:$site" \
+restic backup --quiet --tag "$tag" --tag "site:$site" \
   --exclude "$stack_dir/.env" \
   "$work" "$stack_dir"
 
-echo "Rétention : $keep_daily jours, $keep_weekly semaines, $keep_monthly mois…"
-restic forget --quiet --tag dokopilot --prune \
-  --keep-daily "$keep_daily" --keep-weekly "$keep_weekly" --keep-monthly "$keep_monthly"
+if [[ "$tag" == dokopilot ]]; then
+  echo "Rétention : $keep_daily jours, $keep_weekly semaines, $keep_monthly mois…"
+  restic forget --quiet --tag dokopilot --prune \
+    --keep-daily "$keep_daily" --keep-weekly "$keep_weekly" --keep-monthly "$keep_monthly"
+else
+  restic forget --quiet --tag "$tag" --keep-last 5 --prune
+fi
 
 echo "Vérification du dépôt…"
 restic check --quiet
 
 rm -rf "$work"
-restic snapshots --tag dokopilot --latest 1 --compact
+restic snapshots --tag "$tag" --latest 1 --compact
 echo "Sauvegarde terminée."
 {% endraw %}

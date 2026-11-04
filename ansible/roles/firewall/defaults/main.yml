@@ -5,7 +5,6 @@
 firewall_config_file: /etc/nftables.conf
 firewall_table: dokopilot
 # WireGuard port used by Tailscale for direct connections.
-firewall_tailscale_port: 41641
 firewall_tailscale_interface: tailscale0
 # Tailscale address ranges (IPv4 CGNAT and IPv6 ULA), reached through tailscale0.
 firewall_tailscale_cidrs:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Maintenance accounts are nominative, never root.
 # expect: invalide : il faut un nom
 maintenance:

@@ -518,8 +518,17 @@ EOF
     docker save "$derived" | on_server_stdin docker load --quiet >/dev/null
     ok "derived image $derived preloaded from this machine"
   fi
-  must_run site-1 "$work/inventory.yml" "$work/client-retired.yml" playbooks/site.yml
-  must_run site-2 "$work/inventory.yml" "$work/client-retired.yml" playbooks/site.yml
+  # Test only: an image build behind this machine's TLS-intercepting proxy needs its CA.
+  echo '{}' > "$work/site-overrides.yml"
+  if [[ -n "$apt_proxy" ]]; then
+    cat > "$work/site-overrides.yml" <<EOF
+dokos_build_network: host
+dokos_build_args: { HTTPS_PROXY: "$apt_proxy", HTTP_PROXY: "$apt_proxy", NO_PROXY: "localhost,127.0.0.1" }
+dokos_build_ca_file: /usr/local/share/ca-certificates/dokopilot-test-extra-ca.crt
+EOF
+  fi
+  must_run site-1 "$work/inventory.yml" "$work/client-retired.yml" playbooks/site.yml -e "@$work/site-overrides.yml"
+  must_run site-2 "$work/inventory.yml" "$work/client-retired.yml" playbooks/site.yml -e "@$work/site-overrides.yml"
   assert_no_change site-2
   expect_contains "site.yml prints the French summary" "$(cat "$work/site-2.log")" \
     "Installation terminée pour Atelier Démo" "Dokos : http://$server_ip"
@@ -561,10 +570,14 @@ EOF
   must_run backup "$work/inventory.yml" "$work/client-retired.yml" playbooks/backup.yml
   snapshots="$(on_server sh -c 'set -a; . /etc/dokopilot/restic.env; restic snapshots --compact')"
   expect_contains "a restic snapshot exists" "$snapshots" '[0-9]+ snapshots?'
-  if grep -q -- "$sudo_password" "$work"/*.log; then
-    fail "the sudo password appears in a playbook log"
+  # No secret in the playbook logs, nor on the server in the sudo log or the journal.
+  sed -n 's/^  [a-z_]*password: "\(.*\)"$/\1/p' "$work/secrets.yml" > "$work/secret-values.txt"
+  [[ -s "$work/secret-values.txt" ]] || fail "test setup: no secret values to look for"
+  on_server sh -c 'cat /var/log/sudo.log 2>/dev/null; journalctl --no-pager -q -o cat' > "$work/server-logs.txt"
+  if grep -qF -f "$work/secret-values.txt" "$work"/*.log "$work/server-logs.txt"; then
+    fail "a secret appears in a playbook log, the sudo log or the journal of the server"
   fi
-  ok "no secret in the logs of the full installation"
+  ok "no secret in the playbook logs, the sudo log or the journal of the server"
 fi
 
 step "All system checks passed"

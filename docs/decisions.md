@@ -10,7 +10,8 @@ Chaque décision indique le contexte, le choix, les options écartées et ce qui
 
 ## D-02 — Ansible et Docker Compose, une commande unique
 
-- **Choix** : Ansible (rôles idempotents) pour le serveur, Docker Compose pour la pile Dokos, un CLI `bin/dokopilot` qui assemble configuration, secrets et inventaire. Un seul fichier `client.yml` par client, fusionné avec les valeurs par défaut du profil dans le fait `dp`, validé avant toute modification.
+- **Choix** : Ansible (rôles idempotents) pour le serveur, Docker Compose pour la pile Dokos, un CLI `bin/dokopilot` qui assemble configuration, secrets et inventaire. Un seul fichier `client.yml` par client (complété par `client.local.yml`, fusionné en profondeur par le CLI), fusionné avec les valeurs par défaut du profil dans le fait `dp`, validé avant toute modification. Le CLI refuse tout réglage de premier niveau inconnu : les variables internes des rôles ne se règlent pas depuis un fichier client.
+- **Version d'Ansible** : ansible-core 2.21, qui fonctionne avec Python 3.12 et plus (Ubuntu 24.04, WSL, Debian 13) ; la 2.22 exige Python 3.13.
 - **Écartés** : Kubernetes (surdimensionné pour un serveur unique), scripts shell seuls (ni idempotents ni testables), Terraform (le VPS est loué par l'entrepreneur, souvent sans API).
 - **Revoir si** : plusieurs serveurs par client deviennent la norme.
 
@@ -32,11 +33,12 @@ Chaque décision indique le contexte, le choix, les options écartées et ce qui
 
 - **Choix** : en production, Dokos écoute sur 127.0.0.1 et n'est publié que par `tailscale serve` (HTTPS sur le nom MagicDNS). Seul le port SSH de maintenance est ouvert sur Internet. Le mode `lan` (HTTP par Caddy, filtré sur des plages privées) n'existe que pour le profil demo.
 - **Écartés** : exposition publique derrière un proxy (surface d'attaque), WireGuard brut (gestion des clés et des pairs à la main).
+- **Pare-feu** : aucun port UDP n'est ouvert pour Tailscale (il établit ses connexions directes depuis le serveur, sinon il passe par ses relais) ; sur l'interface Tailscale, seuls HTTPS (Dokos) et SSH sont acceptés, les règles d'accès du tailnet filtrant en plus qui peut les joindre.
 - **Conséquences** : l'entrepreneur et ses postes rejoignent le réseau Tailscale ; un harnais en nuage (application Claude) ne peut pas joindre Dokos, d'où Claude Code sur le poste ; eTransactions et bank ne font que des appels sortants, compatibles.
 
 ## D-06 — Accès de maintenance
 
-- **Choix** : comptes nominatifs, clé SSH uniquement, `sudo` avec mot de passe (stocké dans les secrets ; le CLI le fournit à Ansible), pas de connexion root, fail2ban sur SSH, groupe `dokopilot-maint`. Les comptes retirés de la configuration sont verrouillés, pas supprimés.
+- **Choix** : comptes nominatifs, clé SSH uniquement, `sudo` avec mot de passe (stocké dans les secrets ; le CLI le fournit à Ansible), pas de connexion root, fail2ban sur SSH, groupe `dokopilot-maint`. Les comptes retirés de la configuration sont verrouillés, pas supprimés. Le compte initial de l'hébergeur ou de l'installation (`server.bootstrap_user`, sauf root) sert au premier passage, puis perd son mot de passe, ses groupes et ses clés ; root ne se connecte jamais en SSH.
 - **Raison** : une clé SSH volée, ou un agent qui pilote l'installation, ne donne pas à elle seule les droits root.
 
 ## D-07 — Docker CE du dépôt officiel, pare-feu nftables dans sa propre table
@@ -93,3 +95,12 @@ Tranchées pendant la construction de la pile, vérifiées par `tests/stack/run.
 - **Création du site** : par le code de `bench new-site` appelé en Python, pour que les mots de passe n'apparaissent jamais sur une ligne de commande ; `bench migrate` ne tourne que lorsque l'image change.
 - **Démo** : `demo-reset` supprime et recrée le site, garde les jetons des assistants et refuse un site sans le marqueur de démo ; une restauration remet aussi la clé de chiffrement du site sauvegardé.
 - **Points amont relevés** (sans modification de notre part) : eTransactions 2.17.0 ne rapproche pas les articles par l'identifiant acheteur des factures CII et ne reporte pas le numéro de commande sur la facture fournisseur ; les brouillons ont un nom provisoire jusqu'à leur validation ; un journal « Banque » est nécessaire aux paiements, créé par l'assistant de configuration seulement si un compte bancaire lui est donné (voir exploitation.md). Ces points sont à signaler à Dokos.
+
+## D-16 — Composants non libres acceptés, et leurs alternatives
+
+La règle « logiciels libres uniquement » s'applique à ce dépôt et à ce qu'il installe. Deux services ou outils non libres sont acceptés, parce qu'ils sont facultatifs ou remplaçables sans changer l'architecture :
+
+- **Claude Code** (harnais propriétaire d'Anthropic) : option sur le poste de l'entrepreneur ; le harnais par défaut est opencode (MIT).
+- **Service de coordination de Tailscale** (service en ligne propriétaire ; le client et le démon sont sous licence BSD-3) : il ne voit que des métadonnées de connexion, jamais le trafic, chiffré de bout en bout par WireGuard. Alternative libre : Headscale (BSD-3), serveur de coordination auto-hébergé, compatible avec le client Tailscale ; à prévoir si un client refuse ce service.
+- **Revoir si** : un client exige une chaîne entièrement libre (Headscale et opencode seuls).
+

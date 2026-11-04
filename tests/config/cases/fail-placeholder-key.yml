@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # The example key of client.example.yml is refused.
 # expect: invalide : il faut un nom
 maintenance:

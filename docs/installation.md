@@ -66,7 +66,7 @@ Le premier passage crée les comptes de maintenance et ferme SSH à tout autre c
 
 - L'entrepreneur se connecte avec son adresse et le mot de passe initial (`bin/dokopilot secrets acme show entrepreneur_password`), puis le change.
 - Installez Tailscale et le harnais sur son poste : [poste-entrepreneur.md](poste-entrepreneur.md).
-- Testez une restauration : `bin/dokopilot backup acme`, puis vérifiez la présence de l'instantané (`sudo restic snapshots` sur le serveur, avec `/etc/dokopilot/restic.env`).
+- Testez une restauration : `bin/dokopilot backup acme`, puis vérifiez la présence de l'instantané (sur le serveur : `sudo bash -c 'set -a; . /etc/dokopilot/restic.env; set +a; restic snapshots'`), puis faites un essai de restauration sur une VM de test.
 - Consignez le traitement : l'entrepreneur est responsable de traitement ; l'intégrateur, sous-traitant au sens de l'article 28 du RGPD, signe un contrat de sous-traitance qui décrit ses accès de maintenance.
 
 ## 6. Ensuite

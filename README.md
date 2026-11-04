@@ -12,7 +12,7 @@ Tout se règle dans **un seul fichier par client** (`clients/<client>/client.yml
 
 ## Démarrage rapide : tester sur une VM locale avec des données de test
 
-Il vous faut un poste Linux, macOS ou Windows avec WSL, Python 3.11+, `age`, une clé SSH (`ssh-keygen -t ed25519`) et une VM Debian 13 amd64 de 4 vCPU, 8 Go de RAM et 40 Go de disque ([docs/vm-locale.md](docs/vm-locale.md) explique comment la créer).
+Il vous faut un poste Linux, macOS ou Windows avec WSL, Python 3.12+ avec `venv`, `make`, `age`, une clé SSH (`ssh-keygen -t ed25519`) et une VM Debian 13 amd64 de 4 vCPU, 8 Go de RAM et 40 Go de disque ([docs/vm-locale.md](docs/vm-locale.md) explique comment la créer).
 
 ```bash
 git clone https://github.com/GDS-42/DokoPilotV2.git && cd DokoPilotV2

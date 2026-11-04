@@ -25,6 +25,10 @@
                      'admin_email': dp.dokos.admin_email or dp.users.entrepreneur.email}
          }, recursive=True) }}
 
+- name: Start the list of maintenance accounts afresh (the role runs once per play)
+  ansible.builtin.set_fact:
+    _dp_maintenance_users: []
+
 - name: Read the maintenance public keys given as files on the workstation
   ansible.builtin.set_fact:
     _dp_maintenance_users: >-
@@ -107,10 +111,11 @@
     that:
       - not dp.demo.load_test_data
       - dp.backup.repository is match('^[a-z0-9]+:')
+      - dp.backup.repository is not search('\\.(invalid|example)(/|:|$)')
     fail_msg: >-
       En production : aucune donnée de test (demo.load_test_data: false) et un dépôt de
-      sauvegarde distant (backup.repository de la forme s3:…, sftp:…, rest:…), car une
-      sauvegarde sur le même serveur n'en est pas une.
+      sauvegarde distant et réel (backup.repository de la forme s3:…, sftp:…, rest:…, pas
+      l'exemple « s3.example.invalid »), car une sauvegarde sur le même serveur n'en est pas une.
   when: dp.profile == 'production'
 
 - name: Check that the required secrets are present

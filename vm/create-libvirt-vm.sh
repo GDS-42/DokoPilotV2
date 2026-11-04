@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Creates the local demo VM with libvirt/QEMU on a Linux workstation:
+# Creates the local demo VM with libvirt/QEMU on a Linux amd64 workstation:
 # official Debian 13 "generic" cloud image (checksum verified), 4 vCPU, 8 GB RAM, 40 GB disk,
-# cloud-init seed with your maintenance account and SSH key.
+# cloud-init seed with your maintenance account and SSH key. Run it with sudo: the disks go
+# to libvirt's image directory, which the QEMU process can read.
 #
-#   vm/create-libvirt-vm.sh [--name dokopilot-demo] [--user <account>] [--key ~/.ssh/id_ed25519.pub]
-#                           [--memory 8192] [--vcpus 4] [--disk 40] [--network default]
+#   sudo vm/create-libvirt-vm.sh [--name dokopilot-demo] [--user <account>] [--key <public key>]
+#                                [--memory 8192] [--vcpus 4] [--disk 40] [--network default]
 set -euo pipefail
 
+if (( EUID != 0 )); then
+  echo "Lancez ce script avec sudo : sudo $0 $*" >&2
+  exit 1
+fi
+caller="${SUDO_USER:-root}"
+caller_home="$(getent passwd "$caller" | cut -d: -f6)"
 name="dokopilot-demo"
-user="${USER:-integrateur}"
-key="$HOME/.ssh/id_ed25519.pub"
+user="$caller"
+key="$caller_home/.ssh/id_ed25519.pub"
 memory=8192
 vcpus=4
 disk=40
 network="default"
-images="${DOKOPILOT_VM_DIR:-$HOME/.local/share/dokopilot/vm}"
+images="${DOKOPILOT_VM_DIR:-/var/lib/libvirt/images/dokopilot}"
 
 while (( $# > 0 )); do
   case "$1" in
@@ -35,19 +42,23 @@ for cmd in virsh virt-install qemu-img curl sha512sum; do
   command -v "$cmd" >/dev/null || { echo "Commande absente : $cmd (paquets libvirt-daemon-system, virtinst, qemu-utils, curl)" >&2; exit 1; }
 done
 
-case "$(uname -m)" in
-  x86_64) arch=amd64 ;;
-  aarch64|arm64) arch=arm64 ;;
-  *) echo "Architecture non prise en charge : $(uname -m)" >&2; exit 1 ;;
-esac
+# The official Dokos image exists for amd64 only (docs/decisions.md, D-03).
+if [[ "$(uname -m)" != x86_64 ]]; then
+  echo "Ce poste n'est pas en x86-64 ($(uname -m)) : l'image de Dokos n'existe qu'en amd64." >&2
+  echo "Créez la VM sur une machine x86-64, ou en émulation x86-64 (voir docs/vm-locale.md)." >&2
+  exit 1
+fi
+arch=amd64
 
 base_url="https://cloud.debian.org/images/cloud/trixie/latest"
 image="debian-13-generic-${arch}.qcow2"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-mkdir -p "$images"
+install -d -m 0755 "$images"
 
 if virsh -c qemu:///system dominfo "$name" >/dev/null 2>&1; then
-  echo "La VM $name existe déjà. Supprimez-la d'abord : virsh -c qemu:///system destroy $name; virsh -c qemu:///system undefine $name --remove-all-storage" >&2
+  echo "La VM $name existe déjà. Supprimez-la d'abord :" >&2
+  echo "  sudo virsh -c qemu:///system destroy $name; sudo virsh -c qemu:///system undefine $name" >&2
+  echo "  sudo rm -f $images/$name.qcow2 $images/$name-seed.iso; ssh-keygen -R <adresse de la VM>" >&2
   exit 1
 fi
 
@@ -90,7 +101,8 @@ fi
 cat <<MSG
 
 VM $name prête à l'adresse $ip (compte de maintenance : $user).
-Étapes suivantes :
+Attendez la fin de cloud-init : ssh $user@$ip cloud-init status --wait
+Étapes suivantes (sans sudo) :
   bin/dokopilot init demo --address $ip --maintenance-user $user
   bin/dokopilot install demo
 MSG

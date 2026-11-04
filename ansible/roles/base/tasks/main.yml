@@ -144,6 +144,40 @@
     mode: "0644"
   notify: Restart journald
 
+- name: Check whether systemd-resolved is installed (Debian cloud images ship it)
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/systemd-resolved
+  register: _base_resolved
+
+- name: Read the state of systemd-resolved
+  ansible.builtin.systemd_service:
+    name: systemd-resolved
+  register: _base_resolved_unit
+  when: _base_resolved.stat.exists
+
+- name: Create the systemd-resolved drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: _base_resolved.stat.exists
+
+- name: Turn off LLMNR and multicast DNS (they listen on every interface, port 5355)
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/10-dokopilot.conf
+    content: |
+      # Managed by DokoPilot (Ansible). No name-resolution service listens outside loopback.
+      [Resolve]
+      LLMNR=no
+      MulticastDNS=no
+    owner: root
+    group: root
+    mode: "0644"
+  when: _base_resolved.stat.exists
+  notify: Restart systemd-resolved
+
 - name: Add a swap file on servers with little memory
   when:
     - base_swap_size_mb | int > 0

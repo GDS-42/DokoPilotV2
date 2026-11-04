@@ -31,6 +31,7 @@ except ImportError:  # pragma: no cover - depends on the workstation
     sys.exit("PyYAML est introuvable : lancez d'abord « make setup » à la racine du dépôt.")
 
 ANSIBLE_DIR = REPO / "ansible"
+CONFIG_DEFAULTS = ANSIBLE_DIR / "roles" / "config" / "defaults" / "main.yml"
 PLAYBOOKS = ANSIBLE_DIR / "playbooks"
 DEFAULT_IDENTITY = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "dokopilot" / "age-identity.txt"
 SECRET_PLACEHOLDER = "generate"
@@ -105,11 +106,51 @@ def client_files(client: str) -> list[Path]:
     return files
 
 
+def allowed_settings() -> set[str]:
+    """Top-level settings a client file may contain: the keys of dokopilot_defaults."""
+    return set(load_yaml(CONFIG_DEFAULTS).get("dokopilot_defaults", {}))
+
+
 def client_settings(client: str) -> dict[str, Any]:
+    """client.yml deep-merged with client.local.yml, restricted to the documented settings.
+
+    Client files reach Ansible as extra vars, which override every role variable: an
+    unknown top-level key could silently change an internal setting of a role (groups,
+    permissions, checks), so it is refused.
+    """
     settings: dict[str, Any] = {}
     for path in client_files(client):
         settings = deep_merge(settings, load_yaml(path))
+    unknown = sorted(set(settings) - allowed_settings())
+    if unknown:
+        raise CliError(
+            f"Réglages inconnus pour le client « {client} » : {', '.join(unknown)}. Seuls les réglages de "
+            "config/client.example.yml sont acceptés ; les variables internes des rôles ne se changent pas depuis client.yml."
+        )
     return settings
+
+
+def private_key_for(settings: dict[str, Any], user: str) -> Path | None:
+    """Private key of a maintenance account, from DOKOPILOT_SSH_KEY or next to its declared public key."""
+    if os.environ.get("DOKOPILOT_SSH_KEY"):
+        return Path(os.environ["DOKOPILOT_SSH_KEY"]).expanduser()
+    for account in settings.get("maintenance", {}).get("users", []) or []:
+        if account.get("name") != user:
+            continue
+        for public in account.get("ssh_public_key_files", []) or []:
+            path = Path(public).expanduser()
+            if path.suffix == ".pub" and path.with_suffix("").exists():
+                return path.with_suffix("")
+    return None
+
+
+def ssh_options(key: Path | None) -> list[str]:
+    """Trust a server's key on first use only; offer only the account's key when it is known
+    (sshd allows 3 attempts, and fail2ban counts the failures of keys offered by an agent)."""
+    options = ["-o", "StrictHostKeyChecking=accept-new"]
+    if key is not None:
+        options += ["-o", "IdentitiesOnly=yes", "-i", str(key)]
+    return options
 
 
 def run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -202,6 +243,10 @@ def inventory(client: str, settings: dict[str, Any], *, user: str | None, local:
             if not chosen:
                 raise CliError("Aucun compte de maintenance déclaré (maintenance.users).")
             host["ansible_user"] = chosen
+        key = private_key_for(settings, host["ansible_user"]) if not bootstrap or os.environ.get("DOKOPILOT_SSH_KEY") else None
+        host["ansible_ssh_common_args"] = "-o StrictHostKeyChecking=accept-new" + (" -o IdentitiesOnly=yes" if key else "")
+        if key is not None:
+            host["ansible_ssh_private_key_file"] = str(key)
     if not bootstrap and settings.get("maintenance", {}).get("sudo_requires_password", True):
         host["ansible_become_password"] = "{{ secrets.maintenance_sudo_password }}"
     client_id = settings.get("client", {}).get("id", client)
@@ -217,13 +262,14 @@ def ansible_playbook(client: str, playbook: str, args: argparse.Namespace, *, bo
     with private_tempdir() as tmp:
         inv = tmp / "inventory.yml"
         inv.write_text(yaml.safe_dump(inventory(client, settings, user=args.user, local=args.local, bootstrap=bootstrap)), encoding="utf-8")
+        # One merged file: Ansible would replace, not merge, a dict given in two -e files.
+        settings_file = tmp / "client.yml"
+        settings_file.write_text(dump_yaml(settings), encoding="utf-8")
         secrets_file = tmp / "secrets.yml"
         fd = os.open(secrets_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            yaml.safe_dump(data, handle, allow_unicode=True)
-        cmd = [tool("ansible-playbook"), "-i", str(inv)]
-        for path in client_files(client):
-            cmd += ["-e", f"@{path}"]
+            yaml.safe_dump({"secrets": data["secrets"]}, handle, allow_unicode=True)
+        cmd = [tool("ansible-playbook"), "-i", str(inv), "-e", f"@{settings_file}"]
         cmd += ["-e", f"@{secrets_file}", "-e", f"dokopilot_client_dir={clients_dir() / client}"]
         if args.check:
             cmd.append("--check")
@@ -241,21 +287,24 @@ def ansible_playbook(client: str, playbook: str, args: argparse.Namespace, *, bo
 def cmd_doctor(_: argparse.Namespace) -> int:
     ok = True
     checks = [
-        ("python3 ≥ 3.11", sys.version_info >= (3, 11)),
+        ("python3 ≥ 3.12", sys.version_info >= (3, 12)),
         ("ansible-playbook", bool(shutil.which("ansible-playbook") or (REPO / ".venv/bin/ansible-playbook").exists())),
         ("collections Ansible", (REPO / ".collections" / "ansible_collections" / "community" / "docker").exists()),
         ("age", bool(shutil.which("age"))),
         ("age-keygen", bool(shutil.which("age-keygen"))),
         ("ssh", bool(shutil.which("ssh"))),
-        (f"clé age ({identity_path()})", identity_path().exists()),
         ("clé SSH (~/.ssh/id_ed25519.pub)", (Path.home() / ".ssh" / "id_ed25519.pub").exists()),
     ]
     for label, passed in checks:
         print(f"{'✓' if passed else '✗'} {label}")
         ok = ok and passed
+    if identity_path().exists():
+        print(f"✓ clé age ({identity_path()})")
+    else:
+        print(f"· clé age ({identity_path()}) : sera créée par « bin/dokopilot init »")
     if not ok:
-        print("\nInstallez ce qui manque : « make setup » (Ansible), le paquet « age » de votre système,"
-              " « ssh-keygen -t ed25519 » pour une clé SSH. La clé age est créée par « bin/dokopilot init ».")
+        print("\nInstallez ce qui manque : Python 3.12 ou plus avec venv (Debian, Ubuntu : apt install python3-venv make),"
+              " « make setup » (Ansible), le paquet « age » de votre système, « ssh-keygen -t ed25519 » pour une clé SSH.")
     return 0 if ok else 1
 
 
@@ -279,6 +328,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     local: dict[str, Any] = load_yaml(target / "client.local.yml") if (target / "client.local.yml").exists() else {}
     if args.address:
         local = deep_merge(local, {"server": {"address": args.address}})
+    if args.bootstrap_user:
+        local = deep_merge(local, {"server": {"bootstrap_user": args.bootstrap_user}})
     if args.maintenance_user or args.ssh_key:
         name = args.maintenance_user or os.environ.get("USER", "integrateur")
         key = args.ssh_key or "~/.ssh/id_ed25519.pub"
@@ -364,7 +415,8 @@ def cmd_ssh(args: argparse.Namespace) -> int:
     settings = client_settings(args.client)
     inv = inventory(args.client, settings, user=args.user, local=False, bootstrap=False)
     host = next(iter(inv["dokopilot"]["hosts"].values()))
-    cmd = ["ssh", "-p", str(host["ansible_port"]), f"{host['ansible_user']}@{host['ansible_host']}"]
+    key = private_key_for(settings, host["ansible_user"])
+    cmd = ["ssh", *ssh_options(key), "-p", str(host["ansible_port"]), f"{host['ansible_user']}@{host['ansible_host']}"]
     if args.tunnel:
         cmd[1:1] = ["-L", "8080:127.0.0.1:8080"]
         print("Dokos sera joignable sur http://localhost:8080 tant que cette session est ouverte.")
@@ -392,6 +444,7 @@ def parser() -> argparse.ArgumentParser:
     sp.add_argument("--profile", choices=["demo", "production"], default="demo")
     sp.add_argument("--address", help="adresse SSH du serveur ou de la VM")
     sp.add_argument("--maintenance-user", help="nom du compte de maintenance (client.local.yml)")
+    sp.add_argument("--bootstrap-user", help="compte initial de l'hébergeur ou de l'installation, utilisé par bootstrap puis neutralisé")
     sp.add_argument("--ssh-key", help="chemin de la clé SSH publique de ce compte")
     sp.add_argument("--recipient", action="append", help="clé publique age supplémentaire (entrepreneur, secours)")
     sp.set_defaults(func=cmd_init)

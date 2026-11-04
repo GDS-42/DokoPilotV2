@@ -43,24 +43,17 @@
     mode: "0700"
   when: dp.backup.repository is match('^/')
 
-- name: Read the environment of restic
-  ansible.builtin.set_fact:
-    _backup_restic_env: >-
-      {{ {'RESTIC_REPOSITORY': dp.backup.repository, 'RESTIC_PASSWORD': secrets.restic_password}
-         | combine(secrets.restic_env | default({}, true)) }}
-  no_log: true
-
+# restic reads its settings from the root-only env file: a task `environment:` would put the
+# password and the storage keys on the remote command line (sudo log, journal, ps).
 - name: Check whether the restic repository exists
-  ansible.builtin.command: restic cat config
-  environment: "{{ _backup_restic_env }}"
+  ansible.builtin.shell: set -a && . {{ backup_env_file | quote }} && set +a && exec restic cat config
   register: _backup_repo
   changed_when: false
   failed_when: false
   no_log: true
 
 - name: Initialise the restic repository
-  ansible.builtin.command: restic init
-  environment: "{{ _backup_restic_env }}"
+  ansible.builtin.shell: set -a && . {{ backup_env_file | quote }} && set +a && exec restic init
   when: _backup_repo.rc != 0
   register: _backup_init
   changed_when: _backup_init.rc == 0

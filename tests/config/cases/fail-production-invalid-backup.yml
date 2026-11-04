@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The placeholder repository written by `init --profile production` is refused.
+# expect: dépôt de sauvegarde
+profile: production
+client: { siren: "123456789" }
+backup: { repository: "s3:https://s3.example.invalid/compartiment/dokopilot" }

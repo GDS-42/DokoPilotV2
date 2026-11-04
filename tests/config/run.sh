@@ -1,48 +1,54 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Fast tests: the config role accepts valid client settings and refuses unsafe ones.
+# Fast tests, through the CLI as the integrator uses it: `bin/dokopilot config` merges
+# client.yml (base.yml) and client.local.yml (each case), decrypts the age secrets and runs
+# the config role. Valid settings pass; unsafe ones are refused with their French message.
+#   # expect: <text>          a failing case must print this message
+#   # expect-output: <regex>  a passing case must print this (effective configuration)
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
-playbook_bin="${ANSIBLE_PLAYBOOK:-$repo/.venv/bin/ansible-playbook}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-
-printf 'dokopilot:\n  hosts:\n    test:\n      ansible_connection: local\n' > "$work/inventory.yml"
+export DOKOPILOT_CLIENTS_DIR="$work/clients"
+export DOKOPILOT_AGE_IDENTITY="$work/age-identity.txt"
+export ANSIBLE_NOCOLOR=1 ANSIBLE_FORCE_COLOR=0
+age-keygen -o "$DOKOPILOT_AGE_IDENTITY" 2> /dev/null
 failures=0
 
 for case_file in "$here"/cases/*.yml; do
   name="$(basename "$case_file" .yml)"
-  secrets_file="$here/secrets.yml"
+  client="$DOKOPILOT_CLIENTS_DIR/test"
+  rm -rf "$client" && mkdir -p "$client"
+  cp "$here/base.yml" "$client/client.yml"
+  cp "$case_file" "$client/client.local.yml"
+  age-keygen -y "$DOKOPILOT_AGE_IDENTITY" > "$client/recipients.txt"
   if [[ "$name" == "fail-missing-secret" ]]; then
     grep -v 'restic_password' "$here/secrets.yml" > "$work/secrets.yml"
-    secrets_file="$work/secrets.yml"
+  else
+    cp "$here/secrets.yml" "$work/secrets.yml"
   fi
-  # Merge base and case the same way the CLI does (deep merge, lists replaced).
-  python3 - "$here/base.yml" "$case_file" "$work/merged.yml" <<'PY'
-import sys, yaml
-def merge(a, b):
-    out = dict(a)
-    for k, v in b.items():
-        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
-    return out
-base = yaml.safe_load(open(sys.argv[1])) or {}
-case = yaml.safe_load(open(sys.argv[2])) or {}
-yaml.safe_dump(merge(base, case), open(sys.argv[3], "w"), allow_unicode=True)
-PY
-  if (cd "$repo/ansible" && ANSIBLE_CONFIG=ansible.cfg "$playbook_bin" -i "$work/inventory.yml" \
-        -e "@$work/merged.yml" -e "@$secrets_file" playbooks/config.yml > "$work/$name.log" 2>&1); then
+  age --encrypt --armor --recipients-file "$client/recipients.txt" --output "$client/secrets.yml.age" "$work/secrets.yml"
+  if "$repo/bin/dokopilot" config test > "$work/$name.log" 2>&1; then
     outcome=pass
   else
     outcome=fail
   fi
   expected="${name%%-*}"
-  message="$(sed -n 's/^# expect: //p' "$case_file")"
-  if [[ "$outcome" == "$expected" && ( -z "$message" || "$(tr -s ' \n' ' ' < "$work/$name.log")" == *"$message"* ) ]]; then
+  log="$(tr -s ' \n' ' ' < "$work/$name.log")"
+  problems=""
+  [[ "$outcome" == "$expected" ]] || problems="expected $expected, got $outcome"
+  while IFS= read -r message; do
+    [[ -z "$message" || "$log" == *"$message"* ]] || problems+=" missing message « $message »"
+  done < <(sed -n 's/^# expect: //p' "$case_file")
+  while IFS= read -r pattern; do
+    [[ -z "$pattern" ]] || grep -Eq -- "$pattern" "$work/$name.log" || problems+=" missing output /$pattern/"
+  done < <(sed -n 's/^# expect-output: //p' "$case_file")
+  if [[ -z "$problems" ]]; then
     echo "ok    $name"
   else
-    echo "FAIL  $name (expected $expected, got $outcome)"
+    echo "FAIL  $name ($problems)"
     tail -n 20 "$work/$name.log"
     failures=$((failures + 1))
   fi

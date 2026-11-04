@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 profile: production
 exclude_paths:
   - .venv/

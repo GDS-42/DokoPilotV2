@@ -40,8 +40,8 @@ Read [`docs/architecture.md`](docs/architecture.md) and [`docs/decisions.md`](do
 | --- | --- |
 | `make setup` | Ansible, linters and collections in `.venv` |
 | `make lint` | yamllint, ansible-lint (production profile), shellcheck, Python syntax |
-| `make test` | Fast configuration and CLI tests |
-| `make test-system` | System roles against a Debian 13 systemd container (Docker) |
+| `make test` | Fast tests: CLI (`tests/cli`), configuration through the CLI (`tests/config`), harness rendering and guard (`tests/harness`) |
+| `make test-system` | System roles against a Debian 13 systemd container (Docker); `DP_TEST_SITE=1` adds the full installation (site.yml, check, harness, backup) |
 | `make test-stack` | Dokos stack, provisioning, demo data and permission tests (Docker, about 8 GB RAM) |
 
 Run `make lint test` before every pull request, plus `make test-system` or `make test-stack` when you touch those parts. Never weaken a test, a check or an assertion to make it pass.
@@ -49,6 +49,6 @@ Run `make lint test` before every pull request, plus `make test-system` or `make
 ## Conventions
 
 - Ansible: FQCN modules, `ansible-lint` production profile with zero findings, roles read `dp` (never raw client variables), handlers for restarts, `validate:` on every configuration file that has a checker (sshd, sudoers, nftables, Caddy).
-- Shell: `set -euo pipefail`, shellcheck clean. Python: 3.11+, type hints, standard library first.
+- Shell: `set -euo pipefail`, shellcheck clean. Python: 3.12+ on the workstation (ansible-core 2.21), type hints, standard library first; hooks and scripts shipped to the workstation or the server use the standard library only.
 - Pin every external version (image tags or digests, app tags, apt repositories by suite, collections by range) in role defaults, never in tasks.
 - When a fact about Dokos, Tailscale or a harness is uncertain, read the upstream source or documentation and cite it in the decision record or a comment.

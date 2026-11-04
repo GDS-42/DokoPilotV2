@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Client de démonstration, pour une VM locale avec des données de test.
 # Vos réglages propres (adresse de la VM, compte de maintenance) vont dans
 # clients/demo/client.local.yml, créé par `bin/dokopilot init demo` et ignoré par Git.

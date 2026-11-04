@@ -217,6 +217,10 @@ check "doc_delete refusé à l'assistant" equals "$(jq -r '.result.isError' <<<"
 check "la facture existe toujours" equals "$(api "/api/resource/Purchase%20Invoice/$pi_name" | jq -r '.data.name')" "$pi_name"
 direct="$(tool_call doc_create '{"doc":{"doctype":"Purchase Invoice","supplier":"Scierie Démo du Jura","company":"Atelier Démo","bill_no":"TEST-MCP-2","docstatus":1,"items":[{"item_code":"PLANCHE-CHENE","qty":1,"rate":45}]}}')"
 check "création directement validée (docstatus 1) refusée" equals "$(jq -r '.result.isError' <<<"$direct")" true
+# Validation in disguise: doc_update setting docstatus to 1 (some Dokos AI skills suggest it).
+update="$(tool_call doc_update "{\"doctype\":\"Purchase Invoice\",\"name\":\"$pi_name\",\"fields\":{\"docstatus\":1}}")"
+check "doc_update avec docstatus 1 ne valide pas ($(jq -r '.result.content[0].text // ""' <<<"$update" | head -c 80))" \
+  equals "$(api "/api/resource/Purchase%20Invoice/$pi_name" | jq -r '.data.docstatus')" 0
 for doctype in "Sales Invoice" "Payment Entry" "Journal Entry"; do
   name="$(api "/api/resource/$(jq -rn --arg v "$doctype" '$v|@uri')?limit_page_length=1&filters=$(jq -rn '[["docstatus","=",1]]|tojson|@uri')" | jq -r '.data[0].name // empty')"
   [[ -z "$name" ]] && continue

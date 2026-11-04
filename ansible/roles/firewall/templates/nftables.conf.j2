@@ -50,9 +50,9 @@ table inet {{ firewall_table }} {
 {% endif %}
 {% if dp.network.mode == 'tailscale' %}
 
-        # Tailscale: everything coming through the tunnel, and direct WireGuard connections
-        iifname "{{ firewall_tailscale_interface }}" accept
-        udp dport {{ firewall_tailscale_port }} accept
+        # Tailscale: through the tunnel, only Dokos (tailscale serve) and SSH. Direct WireGuard
+        # connections need no inbound rule: Tailscale opens them from the outbound side.
+        iifname "{{ firewall_tailscale_interface }}" tcp dport { {{ 443 if dp.network.tailscale.https | default(true) else 80 }}, {{ dp.server.ssh_port }} } accept
 {% endif %}
 {% if dp.network.mode == 'lan' %}
 

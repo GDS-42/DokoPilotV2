@@ -7,11 +7,10 @@ Ce document décrit ce que l'installation met en place et pourquoi. Les contrôl
 | Port | Ouvert à | Profil |
 | --- | --- | --- |
 | SSH (22 par défaut) | Internet, ou les adresses de `maintenance.ssh_allowed_from` | tous |
-| HTTPS 443 sur l'interface Tailscale | les appareils autorisés du réseau Tailscale | production (`network.mode: tailscale`) |
-| UDP 41641 | Internet (connexions directes Tailscale, chiffrées WireGuard) | production |
+| HTTPS 443 et SSH, sur l'interface Tailscale seulement | les appareils autorisés du réseau Tailscale | production (`network.mode: tailscale`) |
 | HTTP 80 | les plages privées de `network.lan.allowed_cidrs` | demo (`network.mode: lan`) uniquement |
 
-Tout le reste est refusé par le pare-feu (nftables, table `inet dokopilot`, politique « drop » en entrée). Les conteneurs Dokos ne publient leurs ports que sur 127.0.0.1 ; la base de données et le cache ne sont jamais publiés.
+Tout le reste est refusé par le pare-feu (nftables, table `inet dokopilot`, politique « drop » en entrée). Aucun port UDP n'est ouvert : Tailscale établit ses connexions directes depuis le serveur (traversée de NAT) et passe sinon par ses relais. Les conteneurs Dokos ne publient leurs ports que sur 127.0.0.1 ; la base de données et le cache ne sont jamais publiés.
 
 En production, Dokos n'a **aucune** adresse publique : même une faille de Dokos n'est exploitable que depuis un appareil du réseau Tailscale de l'entrepreneur. Réglez dans la console Tailscale : MagicDNS et certificats HTTPS activés, appareils approuvés manuellement, ACL limitant l'accès au serveur aux personnes concernées, expiration de clé désactivée pour le serveur seulement.
 

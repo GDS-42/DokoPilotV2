@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# client.local.yml is deep-merged into client.yml: overriding server.address keeps ssh_port.
+# expect-output: ssh_port: 2222
+# expect-output: address: 192.0.2.20
+# expect-output: 192.0.2.0/24
+server: { address: 192.0.2.20 }

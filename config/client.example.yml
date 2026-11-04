@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # DokoPilot — configuration d'un client (référence commentée)
 #
 # Copiez ce fichier avec `bin/dokopilot init <client>` : il devient

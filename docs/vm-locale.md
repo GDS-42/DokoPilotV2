@@ -7,16 +7,16 @@ Ce guide installe DokoPilot complet sur une machine virtuelle de votre poste, av
 | | Minimum |
 | --- | --- |
 | VM | Debian 13, **amd64** (x86-64), 4 vCPU, **8 Go de RAM**, 40 Go de disque, joignable en SSH depuis votre poste |
-| Poste | Linux, macOS ou Windows avec WSL ; Python 3.11 ou plus ; `age` ; `ssh` ; une clé SSH ed25519 |
-| Réseau | La VM accède à Internet (dépôts Debian, Docker, registre GitLab de Dokos, PyPI, npm) |
+| Poste | Linux, macOS ou Windows avec WSL ; Python 3.12 ou plus avec `venv` ; `make` ; `age` ; `ssh` ; une clé SSH ed25519 |
+| Réseau | La VM accède à Internet (dépôts Debian, Docker et Tailscale, registre GitLab de Dokos, Docker Hub pour MariaDB et Valkey, GitLab, PyPI, npm) |
 
 L'image officielle de Dokos n'existe qu'en amd64 : sur un Mac Apple Silicon, créez la VM en mode **émulation x86-64** (UTM), ce qui est nettement plus lent, ou utilisez une autre machine.
 
 Sur votre poste :
 
 ```bash
-sudo apt install age            # macOS : brew install age
-ssh-keygen -t ed25519           # si vous n'avez pas encore de clé
+sudo apt install python3-venv make age   # macOS : brew install python age
+ssh-keygen -t ed25519                    # si vous n'avez pas encore de clé
 git clone https://github.com/GDS-42/DokoPilotV2.git && cd DokoPilotV2
 make setup                      # Ansible et ses collections dans .venv
 bin/dokopilot doctor            # vérifie les outils
@@ -30,10 +30,10 @@ Choisissez l'une des trois méthodes. Retenez le **nom du compte de maintenance*
 
 ```bash
 sudo apt install libvirt-daemon-system virtinst qemu-utils
-vm/create-libvirt-vm.sh --user "$USER"
+sudo vm/create-libvirt-vm.sh --user "$USER"
 ```
 
-Le script télécharge l'image Debian 13 « generic » officielle, vérifie sa somme de contrôle, crée la VM (4 vCPU, 8 Go, 40 Go) avec votre clé et affiche son adresse IP.
+Le script (lancé avec sudo, car les disques vont dans `/var/lib/libvirt/images/dokopilot`) télécharge l'image Debian 13 « generic » officielle, vérifie sa somme de contrôle, crée la VM (4 vCPU, 8 Go, 40 Go) avec votre clé et affiche son adresse IP. Il refuse un poste qui n'est pas en x86-64.
 
 ### B. VirtualBox, VMware, UTM, Hyper-V ou Proxmox (image cloud et cloud-init)
 
@@ -45,11 +45,17 @@ Le script télécharge l'image Debian 13 « generic » officielle, vérifie sa s
 
 ### C. Installation classique de Debian 13
 
-1. Installez Debian 13 depuis l'ISO « netinst » amd64, avec le serveur SSH, sans environnement de bureau. Laissez le mot de passe root vide : le compte créé pendant l'installation (par exemple `installation`) reçoit sudo.
+1. Installez Debian 13 depuis l'ISO « netinst » amd64, avec le serveur SSH, sans environnement de bureau. Laissez le mot de passe root vide : le compte créé pendant l'installation reçoit sudo. Donnez-lui un nom **différent** de votre compte de maintenance, par exemple `installation` : le premier passage le neutralise (connexion SSH refusée, sudo retiré).
 2. Depuis votre poste : `ssh-copy-id installation@<IP>`.
 3. Le premier passage se fera avec ce compte (étape 3, variante C).
 
 ## 3. Configurer et installer
+
+Connectez-vous une première fois en SSH : vous vérifiez l'empreinte de la VM et attendez que cloud-init ait fini ses installations (méthodes A et B).
+
+```bash
+ssh "$USER"@<IP> cloud-init status --wait     # méthode C : ssh installation@<IP> true
+```
 
 ```bash
 bin/dokopilot init demo --address <IP> --maintenance-user "$USER"
@@ -58,10 +64,11 @@ bin/dokopilot config demo        # affiche la configuration effective, sans rien
 
 `init` crée `clients/demo/client.local.yml` (adresse, compte de maintenance, ignoré par Git), votre clé age (`~/.config/dokopilot/age-identity.txt`, à sauvegarder) et les secrets chiffrés `clients/demo/secrets.yml.age`, avec des mots de passe aléatoires.
 
-Variante C seulement, premier passage avec le compte de l'installation :
+Variante C seulement : déclarez le compte de l'installation, puis faites le premier passage avec lui (`-K` demande son mot de passe sudo) :
 
 ```bash
-bin/dokopilot bootstrap demo --user installation -K
+bin/dokopilot init demo --bootstrap-user installation
+bin/dokopilot bootstrap demo -K
 ```
 
 Puis, dans tous les cas :
@@ -103,13 +110,16 @@ Dans `clients/demo/client.local.yml`, ajoutez `network: { mode: tailscale }`, me
 
 - Recharger les données de test : `bin/dokopilot demo-reset demo`.
 - Tester une restauration : `bin/dokopilot backup demo`, puis `bin/dokopilot restore demo --confirm`.
-- Supprimer la VM (méthode A) : `virsh -c qemu:///system destroy dokopilot-demo && virsh -c qemu:///system undefine dokopilot-demo --remove-all-storage`.
+- Supprimer la VM (méthode A) : `sudo virsh -c qemu:///system destroy dokopilot-demo`, `sudo virsh -c qemu:///system undefine dokopilot-demo`, puis `sudo rm -f /var/lib/libvirt/images/dokopilot/dokopilot-demo*` ; oubliez aussi son empreinte SSH : `ssh-keygen -R <IP>`.
 
 ## En cas de problème
 
 | Symptôme | Piste |
 | --- | --- |
 | `Permission denied (publickey)` | Le compte ou la clé ne correspondent pas : vérifiez `client.local.yml` et `ssh <compte>@<IP>`. |
+| `REMOTE HOST IDENTIFICATION HAS CHANGED` | La VM a été recréée à la même adresse : `ssh-keygen -R <IP>`, puis reconnectez-vous. |
+| `make setup` échoue sur `venv` ou la version de Python | Installez `python3-venv` ; il faut Python 3.12 ou plus (Ubuntu 24.04 et Debian 13 conviennent). |
+| `Could not get lock /var/lib/dpkg/lock` | cloud-init installe encore des paquets : `ssh <compte>@<IP> cloud-init status --wait`, puis relancez. |
 | L'installation s'arrête sur « Debian 13 » ou « x86_64 » | La VM n'est pas une Debian 13 amd64. |
 | Construction de l'image interrompue | Mémoire insuffisante : 8 Go de RAM recommandés. Relancez l'installation. |
 | Dokos ne répond pas sur `http://<IP>` | Votre poste n'est pas sur une plage privée autorisée (`network.lan.allowed_cidrs`) ou la VM est derrière un NAT sans redirection. |

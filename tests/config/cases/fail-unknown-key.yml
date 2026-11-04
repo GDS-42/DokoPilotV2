@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Internal role variables cannot be set from a client file.
+# expect: Réglages inconnus
+maintenance_extra_groups: [docker]
