@@ -10,6 +10,7 @@ clients/demo/*
 # Generated files and local tools
 .venv/
 .collections/
+.ansible/
 .generated/
 *.retry
 __pycache__/
