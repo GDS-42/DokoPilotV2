@@ -452,7 +452,7 @@ step "check.yml, host part"
 must_run host-checks "$work/inventory.yml" "$work/client.yml" "$repo/ansible/playbooks/check.yml" \
   --tags host -e host_checks_backup=false
 expect_contains "host checks report no failure" "$(cat "$work/host-checks.log")" \
-  'OK +SSH : connexion root refusée' 'OK +Pare-feu' 'OK +Docker : aucun port' 'OK +Ports à l.écoute'
+  'OK +SSH : connexion root refusée' 'OK +Pare-feu' 'OK +Docker : aucun port' 'OK +Ports à l.+coute hors boucle locale'
 if grep -q 'ÉCHEC' "$work/host-checks.log"; then
   grep 'ÉCHEC' "$work/host-checks.log" >&2
   fail "a host check failed"
