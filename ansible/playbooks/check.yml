@@ -14,9 +14,8 @@
     - name: Host checks
       tags: [host]
       block:
-        - name: Host checks are added here by the system roles
-          ansible.builtin.debug:
-            msg: "Contrôles du système : à compléter par les rôles système."
+        - name: Check the host hardening
+          ansible.builtin.include_tasks: tasks/host-checks.yml
     # ================== END OF HOST CHECKS ==================
 
     - name: Dokos checks (stack, site, MCP, assistants' permissions)

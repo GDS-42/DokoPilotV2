@@ -1,0 +1,120 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Read-only checks of the host hardening, included by check.yml (tag `host`).
+# Each check records a French line in _host_findings; the last task fails if any check failed.
+
+- name: Read the effective SSH server configuration
+  ansible.builtin.command: sshd -T
+  register: _sshd_t
+  changed_when: false
+
+- name: Read the nftables table of DokoPilot
+  ansible.builtin.command: nft list table inet dokopilot
+  register: _nft
+  changed_when: false
+  failed_when: false
+
+- name: Read the fail2ban SSH jail
+  ansible.builtin.command: fail2ban-client status sshd
+  register: _f2b
+  changed_when: false
+  failed_when: false
+
+- name: Read the published container ports
+  ansible.builtin.command: docker ps --format '{{ "{{" }}.Names{{ "}}" }} {{ "{{" }}.Ports{{ "}}" }}'
+  register: _docker_ports
+  changed_when: false
+  failed_when: false
+
+- name: Read the listening TCP sockets
+  ansible.builtin.command: ss -Htlnp
+  register: _ss
+  changed_when: false
+
+- name: Read the members of the docker group
+  ansible.builtin.getent:
+    database: group
+    key: docker
+  failed_when: false
+
+- name: Read the state of the automatic updates and of the backup timer
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+  loop:
+    - unattended-upgrades.service
+    - dokopilot-backup.timer
+  register: _enabled
+  failed_when: false
+
+- name: Read the Tailscale state
+  ansible.builtin.command: tailscale status --json
+  register: _ts_status
+  changed_when: false
+  failed_when: false
+  when: dp.network.mode == 'tailscale'
+
+- name: Read the Tailscale Serve and Funnel configuration
+  ansible.builtin.command: tailscale serve status --json
+  register: _ts_serve
+  changed_when: false
+  failed_when: false
+  when: dp.network.mode == 'tailscale'
+
+- name: Evaluate the host checks
+  vars:
+    _sshd: "{{ dict(_sshd_t.stdout_lines | map('split', ' ', 1) | selectattr('1', 'defined') | map('list') | list) }}"
+    # Local addresses of listening sockets, e.g. "0.0.0.0:22", "127.0.0.1:8080", "[::]:22".
+    _listen: "{{ _ss.stdout_lines | map('split') | map(attribute=3) | list }}"
+    _loopback: "{{ _listen | select('match', '^(127\\.|\\[::1\\]|::1)') | list }}"
+    # Addresses of the Tailscale interface are only reachable from the tailnet (peer API, serve).
+    _tailnet: "{{ _listen | select('match', '^(100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\.|\\[fd7a:115c:a1e0:)') | list }}"
+    _exposed_ports: "{{ _listen | difference(_loopback) | difference(_tailnet) | map('regex_replace', '^.*:', '') | unique | list }}"
+    _allowed_ports: >-
+      {{ [dp.server.ssh_port | string]
+         + (['80'] if dp.network.mode == 'lan' else []) }}
+    _docker_members: "{{ (ansible_facts.getent_group | default({})).get('docker', ['', '', ''])[2] | default('') }}"
+    _maintenance_names: "{{ dp.maintenance.users | map(attribute='name') | list }}"
+    _unit_states: >-
+      {{ dict(_enabled.results | map(attribute='item')
+              | zip(_enabled.results | map(attribute='status', default={}) | map(attribute='UnitFileState', default=''))) }}
+    _ts: "{{ (_ts_status.stdout | default('{}') | from_json) if (_ts_status.rc | default(1)) == 0 else {} }}"
+    _serve: "{{ (_ts_serve.stdout | default('{}') | from_json) if (_ts_serve.rc | default(1)) == 0 else {} }}"
+  ansible.builtin.set_fact:
+    _host_findings:
+      - ok: "{{ _sshd.permitrootlogin | default('') == 'no' }}"
+        msg: "SSH : connexion root refusée"
+      - ok: "{{ _sshd.passwordauthentication | default('') == 'no' and _sshd.kbdinteractiveauthentication | default('') == 'no' }}"
+        msg: "SSH : mots de passe refusés, clé uniquement"
+      - ok: "{{ _sshd.allowgroups | default('') == 'dokopilot-maint' }}"
+        msg: "SSH : seuls les comptes de maintenance (groupe dokopilot-maint) se connectent"
+      - ok: "{{ _nft.rc == 0 and 'policy drop' in _nft.stdout }}"
+        msg: "Pare-feu : table inet dokopilot active, politique « drop » en entrée"
+      - ok: "{{ _f2b.rc == 0 }}"
+        msg: "fail2ban : prison sshd active"
+      - ok: "{{ _docker_ports.rc == 0 and (_docker_ports.stdout is not search('(0\\.0\\.0\\.0|\\[::\\]|:::):')) }}"
+        msg: "Docker : aucun port de conteneur publié hors de 127.0.0.1"
+      - ok: "{{ _exposed_ports | difference(_allowed_ports) | length == 0 }}"
+        msg: "Ports à l'écoute hors boucle locale : {{ _exposed_ports | join(', ') }} (attendus : {{ _allowed_ports | join(', ') }})"
+      - ok: "{{ _maintenance_names | intersect(_docker_members.split(',')) | length == 0 }}"
+        msg: "Aucun compte de maintenance dans le groupe docker"
+      - ok: "{{ _unit_states['unattended-upgrades.service'] | default('') == 'enabled' }}"
+        msg: "Mises à jour de sécurité automatiques activées"
+      - ok: "{{ _unit_states['dokopilot-backup.timer'] | default('') == 'enabled' }}"
+        msg: "Sauvegarde quotidienne programmée (dokopilot-backup.timer)"
+      - ok: "{{ dp.network.mode != 'tailscale' or _ts.BackendState | default('') == 'Running' }}"
+        msg: "Tailscale : connecté ({{ dp.network.mode }})"
+      - ok: "{{ dp.network.mode != 'tailscale' or (_serve.AllowFunnel | default({}) | dict2items | selectattr('value') | list | length == 0) }}"
+        msg: "Tailscale : Funnel désactivé (Dokos n'est pas publié sur Internet)"
+
+- name: Print the host checks
+  ansible.builtin.debug:
+    msg: "{{ 'OK    ' if item.ok else 'ÉCHEC ' }} {{ item.msg }}"
+  loop: "{{ _host_findings }}"
+  loop_control:
+    label: "{{ item.msg }}"
+
+- name: Fail when a host check failed
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _host_findings | rejectattr('ok') | list | length == 0
+    fail_msg: "Contrôles du système en échec : {{ _host_findings | rejectattr('ok') | map(attribute='msg') | join(' ; ') }}"
