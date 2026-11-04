@@ -438,6 +438,17 @@ ok "the Dokos port 8080 is not reachable from the network"
 expect_contains "containers log with the local driver" \
   "$(on_server docker inspect -f '{{.HostConfig.LogConfig.Type}}' dokos-stub)" '^local$'
 
+step "check.yml, host part"
+must_run host-checks "$work/inventory.yml" "$work/client.yml" "$repo/ansible/playbooks/check.yml" \
+  --tags host -e host_checks_backup=false
+expect_contains "host checks report no failure" "$(cat "$work/host-checks.log")" \
+  'OK +SSH : connexion root refusée' 'OK +Pare-feu' 'OK +Docker : aucun port' 'OK +Ports à l.écoute'
+if grep -q 'ÉCHEC' "$work/host-checks.log"; then
+  grep 'ÉCHEC' "$work/host-checks.log" >&2
+  fail "a host check failed"
+fi
+ok "check.yml host part passes"
+
 # ------------------------------------------------------------------ lockout guards
 step "Lockout guards"
 # expect_refusal NAME CLIENT_FILE ROLE MESSAGE: the role must stop with MESSAGE.

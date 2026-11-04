@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Read-only checks of the host hardening, included by check.yml (tag `host`).
 # Each check records a French line in _host_findings; the last task fails if any check failed.
+# host_checks_backup=false skips the backup timer check (system-only tests, no Dokos stack).
 
 - name: Read the effective SSH server configuration
   ansible.builtin.command: sshd -T
@@ -98,7 +99,7 @@
         msg: "Aucun compte de maintenance dans le groupe docker"
       - ok: "{{ _unit_states['unattended-upgrades.service'] | default('') == 'enabled' }}"
         msg: "Mises à jour de sécurité automatiques activées"
-      - ok: "{{ _unit_states['dokopilot-backup.timer'] | default('') == 'enabled' }}"
+      - ok: "{{ not (host_checks_backup | default(true)) or _unit_states['dokopilot-backup.timer'] | default('') == 'enabled' }}"
         msg: "Sauvegarde quotidienne programmée (dokopilot-backup.timer)"
       - ok: "{{ dp.network.mode != 'tailscale' or _ts.BackendState | default('') == 'Running' }}"
         msg: "Tailscale : connecté ({{ dp.network.mode }})"
