@@ -183,6 +183,20 @@
   register: _dokos_configurator
   changed_when: (_dokos_configurator.stdout | from_json).changed | bool
 
+# Docker Hub limits anonymous pulls per address: pull explicitly, with retries, before the
+# stack starts (compose itself would fail at the first refusal).
+- name: Pull the database and cache images (pinned by digest)
+  community.docker.docker_image_pull:
+    name: "{{ item | regex_replace(':[^/@]+@', '@') }}"
+    pull: not_present
+  loop:
+    - "{{ dokos_mariadb_image }}"
+    - "{{ dokos_valkey_image }}"
+  register: _dokos_service_pull
+  retries: 5
+  delay: 30
+  until: _dokos_service_pull is succeeded
+
 - name: Start the stack
   community.docker.docker_compose_v2:
     project_src: "{{ dokopilot_stack_dir }}"

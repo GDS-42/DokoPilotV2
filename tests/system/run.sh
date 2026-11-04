@@ -515,6 +515,16 @@ EOF
   fi
   # The stand-in of the proxy step holds 127.0.0.1:8080, the port of the Dokos frontend.
   on_server docker rm -f dokos-stub >/dev/null
+  # Test only: Docker Hub rate-limits shared addresses; reuse the database and cache images
+  # of this machine when it has them (same digests as the role defaults).
+  while IFS= read -r ref; do
+    if docker image inspect "$ref" >/dev/null 2>&1; then
+      docker save "$ref" | on_server_stdin docker load --quiet >/dev/null
+      if on_server docker image inspect "$ref" >/dev/null 2>&1; then
+        ok "image $ref preloaded from this machine"
+      fi
+    fi
+  done < <(sed -n 's/^dokos_\(mariadb\|valkey\)_image: //p' "$repo/ansible/roles/dokos/defaults/main.yml")
   # Test only: an image build behind this machine's TLS-intercepting proxy needs its CA.
   echo '{}' > "$work/site-overrides.yml"
   if [[ -n "$apt_proxy" ]]; then
