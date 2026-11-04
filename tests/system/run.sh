@@ -8,7 +8,10 @@
 #   3. checks of SSH, sudo, nftables, fail2ban, Docker, updates and base settings;
 #   4. the proxy role (Caddy, lan mode), twice, then requests through it;
 #   5. retirement of a maintenance account (system.yml without it, twice);
-#   6. the tailscale role without auth key, which must stop with its French message.
+#   6. the tailscale role without auth key, which must stop with its French message;
+#   7. with DP_TEST_SITE=1, the full installation as a user runs it on a VM: site.yml twice
+#      (Dokos stack, demo data, backups, proxy), check.yml, harness.yml reading the real
+#      assistant token on the server, MCP through Caddy, a backup (needs ~6 GB RAM, ~10 GB disk).
 # Environment: ANSIBLE_PLAYBOOK (default .venv/bin/ansible-playbook), DP_TEST_KEEP=1 to keep
 # the container and the work files, DP_TEST_SUBNET_PREFIX (default 172.30.99, a /24),
 # DP_TEST_CA_FILE (extra CA for an HTTPS proxy, default $SSL_CERT_FILE).
@@ -175,9 +178,13 @@ docker build --quiet "${build_args[@]}" -t "$image" "$work/build" >/dev/null
 ok "image $image built"
 
 step "Test server"
+test_memory=2g
+if [[ "${DP_TEST_SITE:-0}" == 1 ]]; then
+  test_memory=6g
+fi
 docker run -d --name "$container" --hostname dp-test-original --network "$network" --ip "$server_ip" \
   --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock \
-  -v /var/lib/docker -v /var/lib/containerd --memory 2g "$image" >/dev/null
+  -v /var/lib/docker -v /var/lib/containerd --memory "${DP_TEST_MEMORY:-$test_memory}" "$image" >/dev/null
 # Docker bind-mounts these files; make them ordinary files, as on a VM.
 # shellcheck disable=SC2016 # expanded by the shell inside the container
 on_server bash -ec 'for f in /etc/hosts /etc/hostname /etc/resolv.conf; do
@@ -227,11 +234,14 @@ umask 077
 cat > "$work/secrets.yml" <<EOF
 secrets:
   maintenance_sudo_password: "$sudo_password"
-  db_root_password: test-only
-  dokos_admin_password: test-only
-  entrepreneur_password: test-only
-  restic_password: test-only
+  db_root_password: "$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
+  dokos_admin_password: "$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
+  entrepreneur_password: "$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
+  restic_password: "$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
+  restic_env: {}
   tailscale_auth_key: ""
+  etransactions: {}
+  ai_providers: {}
 EOF
 umask 022
 
@@ -489,5 +499,72 @@ expect_contains "tailscaled installed and waiting for a login" "$(on_server tail
   '"BackendState": "NeedsLogin"'
 grep -q -- "$sudo_password" "$work"/*.log && fail "the sudo password appears in a playbook log"
 ok "no secret in the playbook logs"
+
+# ------------------------------------------------------------------ full installation
+if [[ "${DP_TEST_SITE:-0}" == 1 ]]; then
+  step "Full installation: site.yml (Dokos stack, demo data, backups, proxy)"
+  if [[ -n "$apt_proxy" ]]; then
+    # Test only: the nested Docker daemon reaches the registries through the relayed proxy.
+    on_server_stdin sh -ec 'mkdir -p /etc/systemd/system/docker.service.d
+      cat > /etc/systemd/system/docker.service.d/dokopilot-test-proxy.conf
+      systemctl daemon-reload && systemctl restart docker' <<EOF
+[Service]
+Environment=HTTPS_PROXY=$apt_proxy HTTP_PROXY=$apt_proxy NO_PROXY=localhost,127.0.0.1
+EOF
+  fi
+  derived="$(docker images --format '{{.Repository}}:{{.Tag}}' dokopilot/dokos | head -n 1)"
+  if [[ -n "$derived" ]]; then
+    # Saves the image build (2 minutes, 1.3 GB download) when this machine already built it.
+    docker save "$derived" | on_server_stdin docker load --quiet >/dev/null
+    ok "derived image $derived preloaded from this machine"
+  fi
+  must_run site-1 "$work/inventory.yml" "$work/client-retired.yml" playbooks/site.yml
+  must_run site-2 "$work/inventory.yml" "$work/client-retired.yml" playbooks/site.yml
+  assert_no_change site-2
+  expect_contains "site.yml prints the French summary" "$(cat "$work/site-2.log")" \
+    "Installation terminée pour Atelier Démo" "Dokos : http://$server_ip"
+
+  step "check.yml, everything"
+  must_run check-full "$work/inventory.yml" "$work/client-retired.yml" playbooks/check.yml
+  if grep -q 'ÉCHEC' "$work/check-full.log"; then
+    grep 'ÉCHEC' "$work/check-full.log" >&2
+    fail "a check failed after the full installation"
+  fi
+  ok "check.yml passes after the full installation"
+  ping="$(curl --noproxy '*' -s --max-time 20 "http://$server_ip/api/method/ping")"
+  expect_contains "Dokos answers through Caddy" "$ping" '"message": ?"pong"'
+
+  step "harness.yml with the real assistant token"
+  mkdir -p "$work/home"
+  if ! (cd "$repo/ansible" && HOME="$work/home" ANSIBLE_CONFIG="$repo/ansible/ansible.cfg" ANSIBLE_FORCE_COLOR=0 \
+    ANSIBLE_SSH_CONTROL_PATH_DIR="$work/cp" ANSIBLE_LOCAL_TEMP="$work/ansible-tmp" \
+    "$playbook_bin" -i "$work/inventory.yml" -e "@$repo/clients/demo/client.yml" -e "@$work/client-retired.yml" \
+    -e "@$work/secrets.yml" -e "harness_dest=$work/workspace" playbooks/harness.yml) > "$work/harness.log" 2>&1; then
+    tail -n 40 "$work/harness.log"
+    fail "harness.yml failed"
+  fi
+  token_file="$work/home/.config/dokopilot/demo/dokos-token"
+  [[ "$(stat -c %a "$token_file")" == 600 ]] || fail "the token file is not private (0600)"
+  token="$(cat "$token_file")"
+  if grep -rqF -- "$token" "$work/workspace"; then
+    fail "the assistant token was written into the workspace"
+  fi
+  ok "workspace rendered, token kept in a private file outside the workspace"
+  tools="$(curl --noproxy '*' -s --max-time 30 -H "Authorization: token $token" -H 'Content-Type: application/json' \
+    -H 'Accept: application/json' -H 'MCP-Protocol-Version: 2025-11-25' \
+    --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+    "http://$server_ip/api/method/dokos_ai.mcp.endpoint")"
+  expect_contains "MCP through Caddy with the token rendered for the harness" "$tools" '"doc_list"' '"doc_create"'
+  unset token
+
+  step "backup.yml"
+  must_run backup "$work/inventory.yml" "$work/client-retired.yml" playbooks/backup.yml
+  snapshots="$(on_server sh -c 'set -a; . /etc/dokopilot/restic.env; restic snapshots --compact')"
+  expect_contains "a restic snapshot exists" "$snapshots" '[0-9]+ snapshots?'
+  if grep -q -- "$sudo_password" "$work"/*.log; then
+    fail "the sudo password appears in a playbook log"
+  fi
+  ok "no secret in the logs of the full installation"
+fi
 
 step "All system checks passed"

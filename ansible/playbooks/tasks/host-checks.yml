@@ -99,7 +99,7 @@
         msg: "Aucun compte de maintenance dans le groupe docker"
       - ok: "{{ _unit_states['unattended-upgrades.service'] | default('') == 'enabled' }}"
         msg: "Mises à jour de sécurité automatiques activées"
-      - ok: "{{ not (host_checks_backup | default(true)) or _unit_states['dokopilot-backup.timer'] | default('') == 'enabled' }}"
+      - ok: "{{ not (host_checks_backup | default(true) | bool) or _unit_states['dokopilot-backup.timer'] | default('') == 'enabled' }}"
         msg: "Sauvegarde quotidienne programmée (dokopilot-backup.timer)"
       - ok: "{{ dp.network.mode != 'tailscale' or _ts.BackendState | default('') == 'Running' }}"
         msg: "Tailscale : connecté ({{ dp.network.mode }})"
