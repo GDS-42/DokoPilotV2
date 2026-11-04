@@ -11,7 +11,8 @@
 #   6. the tailscale role without auth key, which must stop with its French message;
 #   7. with DP_TEST_SITE=1, the full installation as a user runs it on a VM: site.yml twice
 #      (Dokos stack, demo data, backups, proxy), check.yml, harness.yml reading the real
-#      assistant token on the server, MCP through Caddy, a backup (needs ~6 GB RAM, ~10 GB disk).
+#      assistant token on the server, MCP through Caddy, a backup; the Dokos image is pulled
+#      and built inside the test server as on a VM (needs ~6 GB RAM, ~10 GB disk, 30-45 min).
 # Environment: ANSIBLE_PLAYBOOK (default .venv/bin/ansible-playbook), DP_TEST_KEEP=1 to keep
 # the container and the work files, DP_TEST_SUBNET_PREFIX (default 172.30.99, a /24),
 # DP_TEST_CA_FILE (extra CA for an HTTPS proxy, default $SSL_CERT_FILE).
@@ -512,12 +513,8 @@ if [[ "${DP_TEST_SITE:-0}" == 1 ]]; then
 Environment=HTTPS_PROXY=$apt_proxy HTTP_PROXY=$apt_proxy NO_PROXY=localhost,127.0.0.1
 EOF
   fi
-  derived="$(docker images --format '{{.Repository}}:{{.Tag}}' dokopilot/dokos | head -n 1)"
-  if [[ -n "$derived" ]]; then
-    # Saves the image build (2 minutes, 1.3 GB download) when this machine already built it.
-    docker save "$derived" | on_server_stdin docker load --quiet >/dev/null
-    ok "derived image $derived preloaded from this machine"
-  fi
+  # The stand-in of the proxy step holds 127.0.0.1:8080, the port of the Dokos frontend.
+  on_server docker rm -f dokos-stub >/dev/null
   # Test only: an image build behind this machine's TLS-intercepting proxy needs its CA.
   echo '{}' > "$work/site-overrides.yml"
   if [[ -n "$apt_proxy" ]]; then
