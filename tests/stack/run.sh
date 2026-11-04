@@ -246,7 +246,7 @@ check "bench migrate" migrate_quietly
 check "bench list-apps (dokos_ai installé)" equals "$(in_backend bench --site erp.demo.local list-apps 2>/dev/null | grep -c '^dokos_ai')" 1
 
 
-if playbook check check.yml; then ok "check.yml : $(grep -o 'Résultat : [^"]*' "$work/check.log" | head -n 1)"; else fail "check.yml"; show_failure check; fi
+if playbook check check.yml --tags dokos; then ok "check.yml (partie Dokos ; la partie serveur est vérifiée par tests/system) : $(grep -o 'Résultat : [^"]*' "$work/check.log" | head -n 1)"; else fail "check.yml"; show_failure check; fi
 
 t0=$(date +%s)
 if playbook second dokos.yml; then
