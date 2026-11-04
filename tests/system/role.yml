@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Test playbook: one role on its own after the config role (-e dokopilot_test_role=<role>).
+# Used for the proxy role (in site.yml it runs once Dokos is up), the refusal of the tailscale
+# role without auth key, and the lockout guards of the ssh and firewall roles.
+- name: Apply one role on its own
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+  tasks:
+    - name: Apply the role under test
+      ansible.builtin.include_role:
+        name: "{{ dokopilot_test_role }}"
+
+    - name: Print the address of Dokos
+      ansible.builtin.debug:
+        msg: "dokopilot_dokos_url={{ dokopilot_dokos_url }}"
+      when: dokopilot_test_role == 'proxy'

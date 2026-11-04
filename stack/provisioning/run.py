@@ -25,7 +25,7 @@ DEMO_DIR = Path("/opt/dokopilot/demo")
 if (DEMO_DIR / "demo_loader.py").exists():
     sys.path.insert(1, str(DEMO_DIR))
 
-from dokopilot.common import StepError  # noqa: E402
+from dokopilot.common import StepError  # noqa: E402 (after the sys.path setup)
 
 STEPS: dict[str, tuple[str, str]] = {
     "ensure-site": ("dokopilot.site", "ensure_site"),

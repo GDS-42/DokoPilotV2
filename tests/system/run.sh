@@ -20,14 +20,12 @@ playbook_bin="${ANSIBLE_PLAYBOOK:-$repo/.venv/bin/ansible-playbook}"
 image="dokopilot-system-test:trixie"
 container="dokopilot-system-test"
 network="dokopilot-system-test"
-stub_image="busybox:1.37.0"
 subnet_prefix="${DP_TEST_SUBNET_PREFIX:-172.30.99}"
 gateway="$subnet_prefix.1"
 server_ip="$subnet_prefix.10"
 forward_port=3128
 work="$(mktemp -d)"
 forwarder_pid=""
-pulled_stub=0
 
 cleanup() {
   local rc=$?
@@ -39,9 +37,6 @@ cleanup() {
   else
     docker rm -f -v "$container" >/dev/null 2>&1 || true
     docker network rm "$network" >/dev/null 2>&1 || true
-    if (( pulled_stub )); then
-      docker image rm "$stub_image" >/dev/null 2>&1 || true
-    fi
     rm -rf "$work"
   fi
   exit "$rc"
@@ -182,7 +177,7 @@ ok "image $image built"
 step "Test server"
 docker run -d --name "$container" --hostname dp-test-original --network "$network" --ip "$server_ip" \
   --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock \
-  -v /var/lib/docker -v /var/lib/containerd --memory 3g "$image" >/dev/null
+  -v /var/lib/docker -v /var/lib/containerd --memory 2g "$image" >/dev/null
 # Docker bind-mounts these files; make them ordinary files, as on a VM.
 # shellcheck disable=SC2016 # expanded by the shell inside the container
 on_server bash -ec 'for f in /etc/hosts /etc/hostname /etc/resolv.conf; do
@@ -214,7 +209,7 @@ exec /usr/bin/sqv.real --not-after "\$(date -u -d "@\$((\$(date +%s) + $skew + 6
 EOF
 fi
 
-for account in provider integrateur ancien; do
+for account in provider integrateur ancien nouveau; do
   ssh-keygen -q -t ed25519 -N '' -C "$account@dokopilot-test" -f "$work/$account.key"
 done
 for home in /home/provider /root; do
@@ -258,6 +253,9 @@ write_client "$work/client.yml" integrateur ancien
 write_client "$work/client-retired.yml" integrateur
 cp "$work/client-retired.yml" "$work/client-tailscale.yml"
 printf 'network:\n  mode: tailscale\n' >> "$work/client-tailscale.yml"
+# Lockout guards: a source list without the integrator's address, a maintainer without account.
+sed 's|^  ssh_allowed_from: .*|  ssh_allowed_from: ["198.51.100.0/24"]|' "$work/client.yml" > "$work/client-fw-guard.yml"
+write_client "$work/client-ssh-guard.yml" integrateur ancien nouveau
 
 # Inventories shaped like the ones bin/dokopilot generates.
 ssh_args="-o UserKnownHostsFile=$work/known_hosts -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"
@@ -329,7 +327,7 @@ if ssh_as integrateur "$work/integrateur.key" sudo -n true 2>/dev/null; then
   fail "sudo works without password for integrateur"
 fi
 ok "sudo without password refused"
-[[ "$(ssh_as integrateur "$work/integrateur.key" sudo -S -p '' id -un <<< "$sudo_password")" == root ]] \
+[[ "$(ssh_as integrateur "$work/integrateur.key" "sudo -S -p '' id -un" <<< "$sudo_password")" == root ]] \
   || fail "sudo with the password from the secrets does not work"
 ok "sudo with the password from the secrets works"
 groups_integrateur="$(on_server id -nG integrateur)"
@@ -341,7 +339,7 @@ grep -Eq '^(provider|integrateur) .*NOPASSWD' <<< "$sudoers_cloud" && fail "NOPA
 expect_contains "other NOPASSWD rules removed, unrelated rule kept" "$sudoers_cloud" '^backup ALL=\(root\) NOPASSWD: /usr/bin/true$'
 expect_contains "sudoers file and sudo log" "$(on_server cat /etc/sudoers.d/dokopilot-maintenance /var/log/sudo.log)" \
   '^Defaults use_pty$' '^Defaults:%dokopilot-maint timestamp_timeout=15$' '^%dokopilot-maint ALL=\(ALL:ALL\) ALL$' \
-  'integrateur : .*COMMAND=/usr/bin/id -un'
+  ' : integrateur : ' 'COMMAND=/usr/bin/id -un'
 
 step "Firewall"
 nft_table="$(on_server nft list table inet dokopilot)"
@@ -367,18 +365,25 @@ expect_contains "fail2ban ignores the allowed SSH sources" "$(on_server fail2ban
 expect_contains "fail2ban bans with nftables for 1 h, with increment" \
   "$(on_server fail2ban-client get sshd actions; on_server fail2ban-client get sshd bantime; on_server fail2ban-client get sshd maxretry)" \
   'nftables-multiport' '^3600$' '^5$'
-for _ in 1 2; do
-  on_server ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    "nosuchuser@$server_ip" true >/dev/null 2>&1 || true
-done
-failed=0
-for _ in $(seq 15); do
-  failed="$(on_server fail2ban-client status sshd | sed -n 's/.*Total failed:[[:space:]]*//p')"
-  (( failed >= 2 )) && break
+# Real attempts can only come from the gateway (in ignoreip) or the server itself (ignoreself).
+# Five failures from a documentation address are written to the journal the way OpenSSH 10
+# does (identifier and process name sshd-session), which must trigger a ban.
+attacker=203.0.113.7
+# One process sends the five lines and stays alive a moment: journald reads _COMM from /proc,
+# so a sender that has already exited would leave entries the jail does not match.
+on_server sh -ec "cp /usr/bin/logger /tmp/sshd-session
+  { for i in 1 2 3 4 5; do echo \"Invalid user intrus\$i from $attacker port 4000\$i\"; done; sleep 3; } \\
+    | /tmp/sshd-session -t sshd-session -p auth.info"
+banned=""
+for _ in $(seq 20); do
+  banned="$(on_server fail2ban-client status sshd)"
+  grep -q "Banned IP list:.*$attacker" <<< "$banned" && break
   sleep 1
 done
-(( failed >= 2 )) || fail "fail2ban did not count the failed SSH logins (Total failed: $failed)"
-ok "fail2ban counts failed SSH logins from the journal (Total failed: $failed)"
+expect_contains "fail2ban reads sshd-session failures from the journal and bans after 5" "$banned" \
+  'Total failed:[[:space:]]+[5-9]' "Banned IP list:.*$attacker"
+expect_contains "the ban is enforced in fail2ban's own nftables table" "$(on_server nft list table inet f2b-table)" "$attacker"
+on_server fail2ban-client set sshd unbanip "$attacker" >/dev/null
 
 step "Docker"
 docker_info="$(on_server docker info --format '{{.ServerVersion}} {{.Driver}} {{.LoggingDriver}} live-restore={{.LiveRestoreEnabled}} {{.OSType}}/{{.Architecture}}')"
@@ -407,21 +412,22 @@ expect_contains "no automatic reboot" "$(on_server apt-config dump Unattended-Up
 
 # ------------------------------------------------------------------ proxy
 step "proxy role (lan mode, Caddy), standalone"
-must_run proxy-1 "$work/inventory.yml" "$work/client.yml" "$here/proxy.yml"
-expect_contains "dokopilot_dokos_url" "$(cat "$work/proxy-1.log")" "dokopilot_dokos_url=http://$server_ip\""
-must_run proxy-2 "$work/inventory.yml" "$work/client.yml" "$here/proxy.yml"
+must_run proxy-1 "$work/inventory.yml" "$work/client.yml" "$here/role.yml" -e dokopilot_test_role=proxy
+expect_contains "dokopilot_dokos_url" "$(cat "$work/proxy-1.log")" "dokopilot_dokos_url=http://$server_ip\$"
+must_run proxy-2 "$work/inventory.yml" "$work/client.yml" "$here/role.yml" -e dokopilot_test_role=proxy
 assert_no_change proxy-2
 code="$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$server_ip/")"
 [[ "$code" == 502 ]] || fail "Caddy answered $code without Dokos (expected 502)"
 ok "Caddy answers on port 80 (502 while Dokos is absent)"
-# A stand-in for the Dokos frontend, published on 127.0.0.1:8080 like the real one.
-if ! docker image inspect "$stub_image" >/dev/null 2>&1; then
-  docker pull --quiet "$stub_image" >/dev/null
-  pulled_stub=1
-fi
-docker save "$stub_image" | on_server_stdin docker load --quiet >/dev/null
-on_server docker run -d --name dokos-stub -p 127.0.0.1:8080:80 "$stub_image" \
-  sh -c 'mkdir -p /www && echo dokopilot-stub > /www/index.html && exec httpd -f -p 80 -h /www' >/dev/null
+# A stand-in for the Dokos frontend, published on 127.0.0.1:8080 like the real one. It runs
+# from the test image itself (Python's web server), so no registry is needed.
+docker save "$image" | on_server_stdin docker load --quiet >/dev/null
+on_server docker run -d --name dokos-stub -p 127.0.0.1:8080:80 "$image" \
+  sh -c 'mkdir -p /www && echo dokopilot-stub > /www/index.html && exec python3 -m http.server 80 --directory /www' >/dev/null
+for _ in $(seq 20); do
+  curl --noproxy '*' -fs -o /dev/null --max-time 2 "http://$server_ip/" && break
+  sleep 1
+done
 response="$(curl --noproxy '*' -s -i --max-time 10 "http://$server_ip/")"
 expect_contains "Caddy forwards to 127.0.0.1:8080 with security headers" "$response" \
   '^HTTP/1.1 200' 'dokopilot-stub' 'X-Content-Type-Options: nosniff' 'X-Frame-Options: SAMEORIGIN'
@@ -431,6 +437,23 @@ fi
 ok "the Dokos port 8080 is not reachable from the network"
 expect_contains "containers log with the local driver" \
   "$(on_server docker inspect -f '{{.HostConfig.LogConfig.Type}}' dokos-stub)" '^local$'
+
+# ------------------------------------------------------------------ lockout guards
+step "Lockout guards"
+# expect_refusal NAME CLIENT_FILE ROLE MESSAGE: the role must stop with MESSAGE.
+expect_refusal() {
+  local name="$1" client="$2" role="$3" message="$4"
+  if run_playbook "$name" "$work/inventory.yml" "$client" "$here/role.yml" -e "dokopilot_test_role=$role"; then
+    fail "$name: the $role role accepted settings that lock the integrator out"
+  fi
+  expect_contains "$name: the $role role refuses, in French" "$(tr -s ' \n' ' ' < "$work/$name.log")" "$message"
+}
+state_before="$(on_server sh -c 'nft list table inet dokopilot; md5sum /etc/nftables.conf /etc/ssh/sshd_config.d/*')"
+expect_refusal guard-firewall "$work/client-fw-guard.yml" firewall "ne fait pas partie de maintenance.ssh_allowed_from"
+expect_refusal guard-ssh "$work/client-ssh-guard.yml" ssh "Durcissement SSH interrompu, rien n.a été modifié"
+[[ "$(on_server sh -c 'nft list table inet dokopilot; md5sum /etc/nftables.conf /etc/ssh/sshd_config.d/*')" == "$state_before" ]] \
+  || fail "a refused run changed the firewall or the SSH settings"
+ok "the refused runs left the firewall and the SSH settings untouched"
 
 # ------------------------------------------------------------------ retirement
 step "Retire a maintenance account"
@@ -445,7 +468,8 @@ expect_contains "ancien is locked, expired, without keys or groups, home kept" "
 
 # ------------------------------------------------------------------ tailscale
 step "tailscale role without auth key"
-if run_playbook tailscale "$work/inventory.yml" "$work/client-tailscale.yml" "$here/tailscale.yml"; then
+if run_playbook tailscale "$work/inventory.yml" "$work/client-tailscale.yml" "$here/role.yml" \
+  -e dokopilot_test_role=tailscale; then
   fail "the tailscale role succeeded without auth key"
 fi
 expect_contains "the tailscale role stops with the French message" "$(tr -s ' \n' ' ' < "$work/tailscale.log")" \

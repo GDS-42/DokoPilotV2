@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Loads the demo data once (a site marker makes later runs a no-op). Never in production.
+
+- name: Refuse test data outside the demo profile
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.profile == 'demo'
+      - dp.demo.load_test_data | bool
+    fail_msg: >-
+      Les données de test ne se chargent qu'avec le profil demo et demo.load_test_data: true.
+      Elles ne doivent jamais arriver sur un serveur de production.
+
+- name: Copy the demo data next to the stack
+  ansible.builtin.copy:
+    src: "{{ demo_data_src }}/"
+    dest: "{{ dokopilot_stack_dir }}/demo/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Load the test data of the Atelier Démo
+  ansible.builtin.include_role:
+    name: dokos
+    tasks_from: step
+  vars:
+    dokos_step: demo-load
+    dokos_step_no_log: false
+    dokos_step_payload:
+      site: "{{ dp.dokos.site_name }}"
+      company: "{{ dp.client.company_name }}"
+
+- name: Summary of the test data
+  vars:
+    _c: "{{ dokos_step_result.counts }}"
+  ansible.builtin.debug:
+    msg:
+      - "Données de test chargées le {{ dokos_step_result.loaded_on }} (docs/donnees-de-test.md)."
+      - "{{ _c.customers }} clients, {{ _c.suppliers }} fournisseurs, {{ _c['items'] }} articles ;
+        {{ _c.purchase_orders }} commandes d'achat, {{ _c.purchase_receipts }} réceptions ;
+        {{ _c.sales_invoices }} factures de vente dont {{ _c.sales_invoices_overdue }} échues ;
+        {{ _c.payment_entries }} paiements ; {{ _c.bank_transactions }} opérations bancaires ;
+        {{ _c.supplier_invoices }} factures fournisseurs reçues à traiter."

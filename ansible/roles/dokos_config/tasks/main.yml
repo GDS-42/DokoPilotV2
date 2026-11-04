@@ -61,6 +61,16 @@
     msg: "Types de document absents de cette version, ignorés : {{ dokos_step_result.skipped | join(', ') }}"
   when: dokos_step_result.skipped | length > 0
 
+- name: Read the credentials already written on the server
+  ansible.builtin.slurp:
+    src: "{{ dokos_config_assistants_dir }}/{{ item.email }}.json"
+  loop: "{{ dp.users.assistants }}"
+  loop_control:
+    label: "{{ item.email }}"
+  register: _dokos_config_existing
+  failed_when: false
+  no_log: true
+
 - name: Create the assistant users and their API keys
   ansible.builtin.include_role:
     name: dokos
@@ -75,6 +85,9 @@
       language: "{{ dp.client.language }}"
       assistants: "{{ dp.users.assistants }}"
       people: "{{ _people }}"
+      existing_credentials: >-
+        {{ _dokos_config_existing.results | selectattr('content', 'defined') | map(attribute='content')
+           | map('b64decode') | map('from_json') | list }}
 
 - name: Keep the assistants' credentials
   ansible.builtin.set_fact:
@@ -149,9 +162,21 @@
       credentials: "{{ secrets.etransactions | default({}, true) }}"
 
 - name: Summary of the site configuration
+  vars:
+    _company: "{{ dokos_config_company }}"
+    _ai: "{{ dokos_config_ai.settings }}"
   ansible.builtin.debug:
     msg:
-      - "Société : {{ dokos_config_company.company }} ({{ dokos_config_company.chart_of_accounts }}, {{ dokos_config_company.accounts }} comptes, exercices {{ dokos_config_company.fiscal_years | join(', ') }})"
-      - "Assistants : {{ _dokos_config_credentials | map(attribute='user') | join(', ') or 'aucun' }}{{ (' ; désactivés : ' ~ (_dokos_config_disabled | join(', '))) if _dokos_config_disabled | length > 0 else '' }}"
-      - "Dokos AI : serveur MCP {{ 'actif' if dokos_config_ai.settings.enable_mcp_server else 'inactif' }}, écritures {{ 'permises' if dokos_config_ai.settings.mcp_allow_writes else 'interdites' }}, assistant IA interne {{ 'actif' if dokos_config_ai.settings.enable_ai else 'inactif (aucun fournisseur de modèle)' }}"
-      - "eTransactions : plateforme {{ dokos_step_result.platform }}, validation automatique des factures d'achat {{ 'ACTIVE' if dokos_step_result.settings.auto_submit_purchase_invoices else 'désactivée' }}"
+      - >-
+        Société : {{ _company.company }} ({{ _company.chart_of_accounts }}, {{ _company.accounts }} comptes,
+        exercices {{ _company.fiscal_years | join(', ') }})
+      - >-
+        Assistants : {{ _dokos_config_credentials | map(attribute='user') | join(', ') or 'aucun' }}
+        {{ ('; désactivés : ' ~ (_dokos_config_disabled | join(', '))) if _dokos_config_disabled | length > 0 else '' }}
+      - >-
+        Dokos AI : serveur MCP {{ 'actif' if _ai.enable_mcp_server else 'inactif' }},
+        écritures {{ 'permises' if _ai.mcp_allow_writes else 'interdites' }},
+        assistant IA interne {{ 'actif' if _ai.enable_ai else 'inactif (aucun fournisseur de modèle)' }}
+      - >-
+        eTransactions : plateforme {{ dokos_step_result.platform }}, validation automatique des factures
+        d'achat {{ 'ACTIVE' if dokos_step_result.settings.auto_submit_purchase_invoices else 'désactivée' }}

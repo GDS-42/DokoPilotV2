@@ -64,6 +64,7 @@
           - tailscale
           - serve
           - --bg
+          - --yes
           - "{{ ('--https=' if dp.network.tailscale.https else '--http=') ~ _proxy_serve_port }}"
           - "http://{{ proxy_backend }}"
       changed_when: true

@@ -1,8 +1,0 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
-# Test playbook: the tailscale role on its own, used to check the refusal without auth key.
-- name: Connect to Tailscale
-  hosts: dokopilot
-  become: true
-  roles:
-    - role: config
-    - role: tailscale

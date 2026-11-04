@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Non-destructive checks of the Dokos stack (check.yml), usable in production:
+# containers, ping through 127.0.0.1, server-side checks, MCP and permissions with each
+# assistant's own token. Nothing is changed.
+
+- name: List the containers of the stack
+  ansible.builtin.command:
+    argv: [docker, compose, --project-directory, "{{ dokopilot_stack_dir }}", ps, --all, --format, json]
+  register: _check_ps
+  changed_when: false
+
+- name: Evaluate the containers
+  vars:
+    _rows: "{{ _check_ps.stdout_lines | select('match', '^\\s*\\{') | map('from_json') | list }}"
+    _expected: [backend, frontend, websocket, queue-short, queue-long, scheduler, db, valkey-cache, valkey-queue]
+  ansible.builtin.set_fact:
+    _check_containers: "{{ _rows | items2dict(key_name='Service', value_name='State') }}"
+    _check_unhealthy: >-
+      {{ (_expected | reject('in', _rows | selectattr('State', 'eq', 'running') | map(attribute='Service') | list) | list)
+         + (_rows | selectattr('Health', 'defined') | selectattr('Health', 'in', ['unhealthy', 'starting']) | map(attribute='Service') | list) }}
+    _check_exposed: >-
+      {{ _rows | map(attribute='Publishers') | select | flatten | selectattr('PublishedPort', 'gt', 0)
+         | rejectattr('URL', 'in', ['127.0.0.1']) | map(attribute='PublishedPort') | list }}
+
+- name: Ask Dokos for a pong through 127.0.0.1
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ dokopilot_dokos_http_port }}/api/method/ping"
+    return_content: true
+  register: _check_ping
+  failed_when: false
+  changed_when: false
+
+- name: Run the server-side checks
+  ansible.builtin.include_role:
+    name: dokos
+    tasks_from: step
+  vars:
+    dokos_step: checks
+    dokos_step_no_log: false
+    dokos_step_payload:
+      site: "{{ dp.dokos.site_name }}"
+      company: "{{ dp.client.company_name }}"
+      apps: "{{ dokos_site_apps | default(['erpnext', 'etransactions', 'dokos_ai']) }}"
+      assistants: "{{ dp.users.assistants | map(attribute='email') | list }}"
+      assistant_roles: "{{ dokos_config_assistant_roles }}"
+      forbidden_roles: "{{ dokos_config_forbidden_roles }}"
+      critical_doctypes: "{{ dokos_config_critical_doctypes }}"
+      forbidden_ptypes: "{{ dokos_config_forbidden_ptypes }}"
+      pos_doctypes: "{{ dokos_config_pos_doctypes }}"
+      min_workers: 2
+
+- name: Keep the server-side results
+  ansible.builtin.set_fact:
+    _check_server: "{{ dokos_step_result }}"
+
+- name: Read the assistants' credentials
+  ansible.builtin.slurp:
+    src: "{{ dokos_config_assistants_dir }}/{{ item.email }}.json"
+  loop: "{{ dp.users.assistants }}"
+  loop_control:
+    label: "{{ item.email }}"
+  register: _check_credentials
+  failed_when: false
+  no_log: true
+
+- name: Check MCP and the permissions with each assistant's token
+  ansible.builtin.command:
+    argv: [python3, "{{ dokopilot_stack_dir }}/provisioning/http_checks.py"]
+    stdin: >-
+      {{ {'base_url': 'http://127.0.0.1:' ~ dokopilot_dokos_http_port,
+          'assistants': _check_credentials.results | selectattr('content', 'defined') | map(attribute='content')
+                        | map('b64decode') | map('from_json') | list,
+          'doctypes': ['Purchase Invoice', 'Sales Invoice', 'Payment Entry', 'Journal Entry'],
+          'forbidden_ptypes': dokos_config_forbidden_ptypes} | to_json }}
+  register: _check_http_raw
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Collect the problems
+  vars:
+    _http: "{{ _check_http_raw.stdout | default('{}') | from_json if _check_http_raw.rc | default(1) == 0 else {'ok': false, 'assistants': []} }}"
+    _missing_credentials: "{{ _check_credentials.results | rejectattr('content', 'defined') | map(attribute='item.email') | list }}"
+  ansible.builtin.set_fact:
+    _check_http: "{{ _http }}"
+    _check_problems: >-
+      {{ (['conteneurs arrêtés ou en mauvaise santé : ' ~ (_check_unhealthy | join(', '))] if _check_unhealthy | length > 0 else [])
+         + (['ports publiés hors de 127.0.0.1 : ' ~ (_check_exposed | join(', '))] if _check_exposed | length > 0 else [])
+         + ([] if (_check_ping.json.message | default('')) == 'pong' else ['Dokos ne répond pas sur 127.0.0.1:' ~ dokopilot_dokos_http_port])
+         + _check_server.problems
+         + (_missing_credentials | map('regex_replace', '^', 'jeton absent du serveur pour ') | list)
+         + ([] if _check_http_raw.rc | default(1) == 0 else ['contrôle HTTP des assistants impossible'])
+         + (_http.assistants | default([]) | map(attribute='problems') | flatten) }}
+
+- name: Summary of the Dokos checks
+  vars:
+    _pairs: "{{ _check_containers | dict2items | map('dict2items') | map('map', attribute='value') | map('join', ' ') | join(', ') }}"
+    _versions: "{{ _check_server.versions | dict2items | map('dict2items') | map('map', attribute='value') | map('join', ' ') | join(', ') }}"
+  ansible.builtin.debug:
+    msg:
+      - "Conteneurs : {{ _pairs }}"
+      - >-
+        Dokos sur 127.0.0.1:{{ dokopilot_dokos_http_port }} :
+        {{ 'répond' if (_check_ping.json.message | default('')) == 'pong' else 'NE RÉPOND PAS' }} ; versions {{ _versions }}
+      - "Tâches de fond : {{ _check_server.workers }} worker(s) ; serveur MCP {{ 'actif' if _check_server.mcp.enable_mcp_server else 'inactif' }}"
+      - >-
+        Assistants (outils MCP) :
+        {{ _check_http.assistants | default([]) | map(attribute='user') | zip(_check_http.assistants | default([]) | map(attribute='tools', default=0))
+           | map('join', ' : ') | join(' ; ') or 'aucun' }}
+      - >-
+        Résultat : {{ 'tout est conforme' if _check_problems | length == 0
+                      else (_check_problems | length) ~ ' problème(s) : ' ~ (_check_problems | join(' ; ')) }}
+
+- name: Fail when a check did not pass
+  ansible.builtin.fail:
+    msg: "Contrôles Dokos en échec : {{ _check_problems | join(' ; ') }}"
+  when: _check_problems | length > 0

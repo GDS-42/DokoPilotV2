@@ -1,10 +1,11 @@
+#!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Generator of FICTITIOUS received e-invoices for the demo, following EN 16931.
 
 Two syntaxes accepted by eTransactions (etransactions/utils/xml.py, detect_xml_format):
 - UN/CEFACT Cross Industry Invoice (CII D16B), guideline urn:cen.eu:en16931:2017, the XML
   of a Factur-X EN 16931 invoice;
-- OASIS UBL 2.1 Invoice, CustomizationID urn:cen.eu:en16931:2017.
+- OASIS UBL 2.1 Invoice, Peppol BIS Billing 3.0 (an EN 16931 compliant specification).
 
 Only the standard library is used. The loader (demo/demo_loader.py) calls `render()` with
 the real purchase order names and dates; run it alone to write sample files:
@@ -33,6 +34,9 @@ UBL_NS = {
     "cbc": "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2",
 }
 EN16931 = "urn:cen.eu:en16931:2017"
+# UBL invoices are checked against the Peppol BIS Billing 3.0 rules by eTransactions.
+PEPPOL_CUSTOMIZATION = "urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0"
+PEPPOL_PROFILE = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"
 CENT = Decimal("0.01")
 DEMO_NOTE = "Facture FICTIVE générée pour la démonstration DokoPilot : aucune valeur juridique ni fiscale."
 
@@ -51,12 +55,12 @@ def totals(invoice: dict[str, Any]) -> dict[str, Any]:
         amount = money(quantity * price)
         rate = Decimal(str(line.get("vat_rate", 20)))
         lines.append({**line, "quantity": quantity, "price": price, "amount": amount, "vat_rate": rate})
-        by_rate[rate] = by_rate.get(rate, Decimal("0")) + amount
+        by_rate[rate] = by_rate.get(rate, Decimal(0)) + amount
     breakdown = [
         {"rate": rate, "basis": money(basis), "tax": money(basis * rate / 100)} for rate, basis in sorted(by_rate.items())
     ]
-    net = money(sum((line["amount"] for line in lines), Decimal("0")))
-    tax = money(sum((row["tax"] for row in breakdown), Decimal("0")))
+    net = money(sum((line["amount"] for line in lines), Decimal(0)))
+    tax = money(sum((row["tax"] for row in breakdown), Decimal(0)))
     return {"lines": lines, "breakdown": breakdown, "net": net, "tax": tax, "gross": money(net + tax)}
 
 
@@ -185,7 +189,8 @@ def render_ubl(invoice: dict[str, Any]) -> bytes:
     for prefix, uri in UBL_NS.items():
         ET.register_namespace(prefix, uri)
     root = ET.Element(f"{{{UBL_NS['']}}}Invoice")
-    _sub(root, "cbc:CustomizationID", EN16931)
+    _sub(root, "cbc:CustomizationID", PEPPOL_CUSTOMIZATION)
+    _sub(root, "cbc:ProfileID", PEPPOL_PROFILE)
     _sub(root, "cbc:ID", invoice["number"])
     _sub(root, "cbc:IssueDate", invoice["issue_date"].isoformat())
     _sub(root, "cbc:DueDate", invoice["due_date"].isoformat())

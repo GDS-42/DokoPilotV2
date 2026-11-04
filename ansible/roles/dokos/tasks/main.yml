@@ -240,4 +240,6 @@
 
 - name: Show the versions installed on the site
   ansible.builtin.debug:
-    msg: "Site {{ dp.dokos.site_name }} : {{ dokos_site_state.versions | dict2items | map(attribute='key') | zip(dokos_site_state.versions.values()) | map('join', ' ') | join(', ') }}"
+    msg: >-
+      Site {{ dp.dokos.site_name }} :
+      {{ dokos_site_state.versions | dict2items | map('dict2items') | map('map', attribute='value') | map('join', ' ') | join(', ') }}

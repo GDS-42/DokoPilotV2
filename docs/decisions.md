@@ -82,3 +82,14 @@ Chaque décision indique le contexte, le choix, les options écartées et ce qui
 - **Choix** : chaque assistant n'a que deux rôles, `Assistant IA` (créé par l'installation : lecture, création et modification de brouillons, jamais valider, annuler, amender ni supprimer) et `AI Writer` ; aucun rôle métier standard. Les harnais refusent en plus ces trois outils côté poste. Les permissions sont créées par le gestionnaire de permissions de Frappe, jamais par une ligne isolée de permission personnalisée (qui retirerait l'accès des rôles standard).
 - **Conséquence** : le pipeline « Suggest Bank Transaction Reconciliation » de Dokos AI, dont la dernière étape valide un paiement, ne peut pas tourner sous l'identité d'un assistant ; il reste manuel, lancé par une personne.
 - **Revoir si** : Dokos AI permet de désactiver des outils MCP un par un ; proposer cette évolution en amont.
+
+## D-15 — Règles de provisionnement de Dokos
+
+Tranchées pendant la construction de la pile, vérifiées par `tests/stack/run.sh` :
+
+- **Assistants** : pas de permission « e-mail » (l'envoi depuis Dokos serait un effet externe) ; tout rôle en trop trouvé sur un assistant est retiré à chaque passage ; un assistant retiré de `client.yml` est désactivé et son jeton supprimé ; le jeton n'est créé que s'il n'existe pas.
+- **Mots de passe** : celui d'`Administrator` est réappliqué à chaque passage (les secrets font foi) ; celui de l'entrepreneur seulement à la création, puisqu'il le change ensuite.
+- **eTransactions** : la réception reste active et `auto_submit_purchase_invoices` reste à 0 à chaque passage ; avec des identifiants Super PDP, la plateforme d'achat est créée.
+- **Création du site** : par le code de `bench new-site` appelé en Python, pour que les mots de passe n'apparaissent jamais sur une ligne de commande ; `bench migrate` ne tourne que lorsque l'image change.
+- **Démo** : `demo-reset` supprime et recrée le site, garde les jetons des assistants et refuse un site sans le marqueur de démo ; une restauration remet aussi la clé de chiffrement du site sauvegardé.
+- **Points amont relevés** (sans modification de notre part) : eTransactions 2.17.0 ne rapproche pas les articles par l'identifiant acheteur des factures CII et ne reporte pas le numéro de commande sur la facture fournisseur ; les brouillons ont un nom provisoire jusqu'à leur validation ; un journal « Banque » est nécessaire aux paiements, créé par l'assistant de configuration seulement si un compte bancaire lui est donné (voir exploitation.md). Ces points sont à signaler à Dokos.

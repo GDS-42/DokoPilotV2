@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Encrypted backups with restic (Debian package): `bench backup --with-files` of the site,
+# plus the stack configuration (without its .env), to dp.backup.repository.
+
+# --- Shared with the dokos, dokos_config and demo_data roles (same defaults everywhere)
+dokopilot_stack_dir: /opt/dokopilot/stack
+dokopilot_compose_project: dokopilot
+dokopilot_etc_dir: /etc/dokopilot
+dokopilot_bench_backup_dir: /var/lib/dokopilot/bench-backups
+
+# restic settings (RESTIC_REPOSITORY, RESTIC_PASSWORD, secrets.restic_env), root only.
+backup_env_file: "{{ dokopilot_etc_dir }}/restic.env"
+backup_script: /usr/local/sbin/dokopilot-backup
+restore_script: /usr/local/sbin/dokopilot-restore
+backup_unit_name: dokopilot-backup
+backup_systemd_dir: /etc/systemd/system
+backup_packages:
+  - restic
+  - python3
+# Systemd timer for the daily backup (dp.backup.schedule). Only a host without systemd
+# (the test container) sets this to false; the unit files are written anyway.
+backup_enable_timer: true
+# Seconds the timer may delay the start, so that several servers do not hit the same
+# repository at once.
+backup_randomized_delay: 900

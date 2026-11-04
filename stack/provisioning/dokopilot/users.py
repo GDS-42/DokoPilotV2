@@ -62,13 +62,24 @@ def ensure_entrepreneur(payload: dict[str, Any]) -> dict[str, Any]:
     return {"changed": bool(changes), "changes": changes, "user": email, "roles": roles}
 
 
-def _ensure_keys(frappe: Any, user: Any) -> tuple[str, str, bool]:
+def _ensure_keys(frappe: Any, user: Any, previous: dict[str, str] | None) -> tuple[str, str, bool]:
+    """Keep the user's API key; create one only when it has none.
+
+    `previous` holds the credentials already written on the server for this user (after
+    a demo reset, the site is new but the harness keeps working with the same token).
+    """
     from frappe.utils.password import get_decrypted_password
 
     changed = False
     if not user.api_key:
-        user.api_key = frappe.generate_hash(length=15)
-        user.api_secret = frappe.generate_hash(length=15)
+        reusable = (
+            previous
+            and previous.get("api_key")
+            and previous.get("api_secret")
+            and not frappe.db.exists("User", {"api_key": previous["api_key"]})
+        )
+        user.api_key = previous["api_key"] if reusable else frappe.generate_hash(length=15)
+        user.api_secret = previous["api_secret"] if reusable else frappe.generate_hash(length=15)
         changed = True
     elif not get_decrypted_password("User", user.name, "api_secret", raise_exception=False):
         user.api_secret = frappe.generate_hash(length=15)
@@ -84,7 +95,8 @@ def _ensure_keys(frappe: Any, user: Any) -> tuple[str, str, bool]:
 
 def ensure_assistants(payload: dict[str, Any]) -> dict[str, Any]:
     """Payload: site, roles, marker_role, language, assistants: [{email, for}],
-    people: {email: full name} (the person each assistant works for).
+    people: {email: full name} (the person each assistant works for),
+    existing_credentials: [{user, api_key, api_secret}] already written on the server.
 
     Returns the credentials of every assistant ({user, api_key, api_secret}). Users that
     hold `marker_role` (Assistant IA) but are no longer configured are disabled.
@@ -131,7 +143,10 @@ def ensure_assistants(payload: dict[str, Any]) -> dict[str, Any]:
                 user.save()
                 changes.append(f"{email}: roles reset (were {', '.join(current) or 'none'})")
                 user = frappe.get_doc("User", email)
-            api_key, api_secret, keys_changed = _ensure_keys(frappe, user)
+            previous = next(
+                (row for row in payload.get("existing_credentials") or [] if row.get("user") == email), None
+            )
+            api_key, api_secret, keys_changed = _ensure_keys(frappe, user, previous)
             if keys_changed:
                 changes.append(f"{email}: API key generated")
             held = set(frappe.get_roles(email))

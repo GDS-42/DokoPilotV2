@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Test data of the fictitious « Atelier Démo » (demo profile only): demo/ of this repository.
+
+# --- Shared with the dokos, dokos_config and backup roles (same defaults everywhere)
+dokopilot_stack_dir: /opt/dokopilot/stack
+dokopilot_compose_project: dokopilot
+dokopilot_etc_dir: /etc/dokopilot
+
+# Source of the demo data in this repository, copied to <stack>/demo (mounted read-only
+# in the backend container at /opt/dokopilot/demo).
+demo_data_src: "{{ role_path }}/../../../demo"

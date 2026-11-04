@@ -1,0 +1,118 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# restic repository, backup and restore scripts, daily systemd timer.
+
+- name: Check the backup settings
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.backup.repository | length > 0
+      - dp.backup.keep.daily | int > 0
+      - secrets.restic_password is string
+      - secrets.restic_password | length >= 12
+      - (([secrets.restic_password, dp.backup.repository] + ((secrets.restic_env | default({}, true)).values() | list))
+          | select('search', "['\\n]") | list | length) == 0
+      - ((secrets.restic_env | default({}, true)).keys() | reject('match', '^[A-Z][A-Z0-9_]*$') | list | length) == 0
+    fail_msg: >-
+      Réglages de sauvegarde invalides : backup.repository et secrets.restic_password
+      (12 caractères au moins) sont obligatoires ; les valeurs ne doivent contenir ni
+      apostrophe ni retour à la ligne, et les clés de secrets.restic_env sont des noms de
+      variables en majuscules (ex. AWS_ACCESS_KEY_ID).
+  no_log: true
+
+- name: Install restic
+  ansible.builtin.apt:
+    name: "{{ backup_packages }}"
+    state: present
+    install_recommends: false
+
+- name: Write the restic settings (secrets, root only)
+  ansible.builtin.template:
+    src: restic.env.j2
+    dest: "{{ backup_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Create the local repository directory
+  ansible.builtin.file:
+    path: "{{ dp.backup.repository }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: dp.backup.repository is match('^/')
+
+- name: Read the environment of restic
+  ansible.builtin.set_fact:
+    _backup_restic_env: >-
+      {{ {'RESTIC_REPOSITORY': dp.backup.repository, 'RESTIC_PASSWORD': secrets.restic_password}
+         | combine(secrets.restic_env | default({}, true)) }}
+  no_log: true
+
+- name: Check whether the restic repository exists
+  ansible.builtin.command: restic cat config
+  environment: "{{ _backup_restic_env }}"
+  register: _backup_repo
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Initialise the restic repository
+  ansible.builtin.command: restic init
+  environment: "{{ _backup_restic_env }}"
+  when: _backup_repo.rc != 0
+  register: _backup_init
+  changed_when: _backup_init.rc == 0
+  failed_when: false
+  no_log: true
+
+- name: Stop when the repository cannot be reached
+  ansible.builtin.fail:
+    msg: >-
+      Le dépôt de sauvegarde restic {{ dp.backup.repository }} est inaccessible : vérifiez
+      backup.repository, secrets.restic_password et secrets.restic_env (identifiants du
+      stockage). Sur le serveur : set -a; . {{ backup_env_file }}; set +a; restic cat config
+  when:
+    - _backup_repo.rc != 0
+    - _backup_init.rc | default(1) != 0
+
+- name: Install the backup and restore scripts
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - { src: dokopilot-backup.sh.j2, dest: "{{ backup_script }}" }
+    - { src: dokopilot-restore.sh.j2, dest: "{{ restore_script }}" }
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Install the systemd service and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ backup_systemd_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - "{{ backup_unit_name }}.service"
+    - "{{ backup_unit_name }}.timer"
+  notify: Reload systemd
+
+- name: Apply the systemd changes before enabling the timer
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the daily backup
+  ansible.builtin.systemd_service:
+    name: "{{ backup_unit_name }}.timer"
+    enabled: true
+    state: started
+  when: backup_enable_timer | bool
+
+- name: Report that the timer is not managed on this host
+  ansible.builtin.debug:
+    msg: "Pas de systemd sur cet hôte : le minuteur {{ backup_unit_name }}.timer est écrit mais pas activé."
+  when: not backup_enable_timer | bool

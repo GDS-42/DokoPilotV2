@@ -26,7 +26,7 @@
       {{ _dokos_step_raw.stdout_lines | default([]) | select('match', '^\{') | last | default('{}') | from_json }}
   no_log: "{{ dokos_step_no_log | default(true) | bool }}"
 
-- name: "Stop when {{ dokos_step }} failed"
+- name: "Stop when this step failed: {{ dokos_step }}"
   ansible.builtin.fail:
     msg: >-
       Étape de provisionnement « {{ dokos_step }} » en échec :

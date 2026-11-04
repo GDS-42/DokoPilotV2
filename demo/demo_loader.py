@@ -507,8 +507,11 @@ def reset(payload: dict[str, Any]) -> dict[str, Any]:
     import frappe
     from frappe.commands.site import _drop_site
 
+    from dokopilot.common import site_exists
+
     site = payload["site"]
-    require_site(site)
+    if not site_exists(site):
+        return {"changed": False, "dropped": None}
     with site_connection(site) as connection:
         if not connection.db.get_default(MARKER):
             raise StepError(
