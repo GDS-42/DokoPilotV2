@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# nftables firewall limited to our own table `inet dokopilot`: Docker, Tailscale and fail2ban
+# keep their own tables, which are never flushed.
+
+firewall_config_file: /etc/nftables.conf
+firewall_table: dokopilot
+# WireGuard port used by Tailscale for direct connections.
+firewall_tailscale_port: 41641
+firewall_tailscale_interface: tailscale0
+# Tailscale address ranges (IPv4 CGNAT and IPv6 ULA), reached through tailscale0.
+firewall_tailscale_cidrs:
+  - 100.64.0.0/10
+  - fd7a:115c:a1e0::/48
+firewall_lan_http_port: 80
+firewall_icmp_limit: 20/second burst 50 packets

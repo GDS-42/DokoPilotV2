@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Nominative maintenance accounts (dp.maintenance.users): SSH key only, sudo through the
+# maintenance group. Never the docker group: it is root-equivalent.
+
+maintenance_group: dokopilot-maint
+maintenance_sudoers_file: /etc/sudoers.d/dokopilot-maintenance
+maintenance_sudo_log: /var/log/sudo.log
+maintenance_sudo_timestamp_timeout: 15
+# Supplementary groups of a maintenance account, besides maintenance_group. The list is
+# exact: any other supplementary group (sudo, adm, docker…) is removed.
+maintenance_extra_groups: []

@@ -1,0 +1,173 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Base system: supported OS check, packages and updates, identity, locales, kernel and
+# journal settings, swap.
+
+- name: Check that the server runs Debian 13 on a supported architecture
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - ansible_facts['distribution'] == 'Debian'
+      - ansible_facts['distribution_major_version'] == '13'
+      - ansible_facts['architecture'] in ['x86_64', 'aarch64']
+    fail_msg: >-
+      Système non pris en charge : DokoPilot s'installe uniquement sur Debian 13 (trixie),
+      en amd64 ou arm64. Ce serveur indique {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }} ({{ ansible_facts['architecture'] }}).
+
+- name: Update the package cache and apply safe upgrades
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    upgrade: safe
+
+- name: Install the base packages
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+    install_recommends: false
+
+- name: Check whether cloud-init manages this server
+  ansible.builtin.stat:
+    path: /etc/cloud/cloud.cfg.d
+  register: _base_cloud_init
+
+- name: Keep cloud-init from resetting the host name at boot
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/90-dokopilot.cfg
+    content: |
+      # Managed by DokoPilot (Ansible): the host name is set by the base role.
+      preserve_hostname: true
+    owner: root
+    group: root
+    mode: "0644"
+  when: _base_cloud_init.stat.isdir | default(false)
+
+- name: Set the host name
+  ansible.builtin.hostname:
+    name: "{{ dp.server.hostname }}"
+
+# Same layout as cloud-init's Debian template ("127.0.1.1 <fqdn> <hostname>"), so that a
+# cloud-init run at boot and this role agree on the line.
+- name: Resolve the host name locally
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    line: "127.0.1.1 {{ dp.server.hostname }} {{ dp.server.hostname.split('.')[0] }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Set the time zone
+  community.general.timezone:
+    name: "{{ dp.client.timezone }}"
+
+- name: Generate the locales
+  community.general.locale_gen:
+    name: "{{ base_locales }}"
+    state: present
+
+- name: Make French the default system language
+  ansible.builtin.copy:
+    dest: /etc/default/locale
+    content: |
+      # Managed by DokoPilot (Ansible): local changes are overwritten.
+      LANG={{ base_default_locale }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Keep the clock synchronised
+  ansible.builtin.systemd_service:
+    name: systemd-timesyncd
+    enabled: true
+    state: started
+
+- name: Enable the periodic package updates
+  ansible.builtin.template:
+    src: 20auto-upgrades.j2
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure unattended-upgrades
+  ansible.builtin.template:
+    src: 52dokopilot-unattended-upgrades.j2
+    dest: /etc/apt/apt.conf.d/52dokopilot-unattended-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable unattended-upgrades
+  ansible.builtin.systemd_service:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+
+- name: Harden the kernel settings
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value | string }}"
+    sysctl_file: "{{ base_sysctl_file }}"
+    sysctl_set: true
+    state: present
+  loop: "{{ base_sysctl | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Create the journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Limit the size of the system journal
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/90-dokopilot.conf
+    content: |
+      # Managed by DokoPilot (Ansible): local changes are overwritten.
+      [Journal]
+      SystemMaxUse={{ base_journald_system_max_use }}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart journald
+
+- name: Add a swap file on servers with little memory
+  when:
+    - base_swap_size_mb | int > 0
+    - ansible_facts['memtotal_mb'] | int < base_swap_ram_threshold_mb | int
+    - ansible_facts['swaptotal_mb'] | int == 0
+  block:
+    - name: Allocate the swap file
+      ansible.builtin.command:
+        argv: [fallocate, -l, "{{ base_swap_size_mb }}M", "{{ base_swap_file }}"]
+        creates: "{{ base_swap_file }}"
+
+    - name: Restrict access to the swap file
+      ansible.builtin.file:
+        path: "{{ base_swap_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Format the swap file
+      community.general.filesystem:
+        dev: "{{ base_swap_file }}"
+        fstype: swap
+
+    - name: Activate the swap file
+      ansible.builtin.command:
+        argv: [swapon, "{{ base_swap_file }}"]
+      changed_when: true
+
+    - name: Activate the swap file at boot
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^{{ base_swap_file | regex_escape }}\s'
+        line: "{{ base_swap_file }} none swap sw 0 0"
+        owner: root
+        group: root
+        mode: "0644"

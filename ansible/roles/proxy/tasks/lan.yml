@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# lan mode: Caddy from Debian on port 80, reverse proxy to Dokos.
+
+- name: Install Caddy
+  ansible.builtin.apt:
+    name: caddy
+    state: present
+
+- name: Configure Caddy as the reverse proxy of Dokos
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ proxy_caddyfile }}"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/bin/caddy validate --adapter caddyfile --config %s
+  notify: Reload caddy
+
+- name: Keep Caddy enabled and running
+  ansible.builtin.systemd_service:
+    name: caddy
+    enabled: true
+    state: started
+
+- name: Keep the address of Dokos for the summary
+  ansible.builtin.set_fact:
+    dokopilot_dokos_url: "http://{{ dp.server.address | default(ansible_host, true) }}"

@@ -1,0 +1,12 @@
+# Valid demo configuration shared by the cases (throwaway public key, not a secret).
+profile: demo
+client: { id: test, company_name: "Test SARL", company_abbr: "TS" }
+server: { address: 192.0.2.10 }
+maintenance:
+  users:
+    - name: integrateur
+      ssh_public_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICdlz24XChizBwhFPp6gSD44SkpfKjNkaDkSJAQyvIlB test@example"]
+users:
+  entrepreneur: { email: dirigeant@example.test, first_name: Alex, last_name: Test }
+  assistants:
+    - { for: dirigeant@example.test, email: assistant@example.test }

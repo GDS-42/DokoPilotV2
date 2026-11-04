@@ -1,0 +1,6 @@
+# Production never exposes Dokos on the LAN.
+# expect: Exposition réseau invalide
+profile: production
+client: { siren: "123456789" }
+network: { mode: lan }
+backup: { repository: "s3:https://s3.example.test/bucket/dokopilot" }

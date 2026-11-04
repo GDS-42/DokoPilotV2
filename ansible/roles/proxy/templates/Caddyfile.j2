@@ -1,0 +1,38 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later #}
+# Managed by DokoPilot (Ansible): local changes are overwritten.
+# Demo profile (network.mode: lan): Dokos over plain HTTP on port 80. The firewall only lets
+# the private ranges of network.lan.allowed_cidrs reach this port.
+{
+	# HTTP only, on a private network: no certificate is requested.
+	auto_https off
+	admin localhost:2019
+}
+
+http://:80 {
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	# Socket.IO (real-time updates): long-lived websocket connections, never buffered.
+	@socketio path /socket.io/*
+	handle @socketio {
+		reverse_proxy {{ proxy_backend }} {
+			header_up Host {host}
+			flush_interval -1
+			transport http {
+				read_timeout {{ proxy_websocket_timeout }}
+				write_timeout {{ proxy_websocket_timeout }}
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy {{ proxy_backend }} {
+			header_up Host {host}
+		}
+	}
+}

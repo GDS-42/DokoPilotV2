@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# OpenSSH hardening with a lockout guard: the new settings are applied only when every
+# maintenance account can log in with a key.
+
+- name: Find the account used for this connection
+  ansible.builtin.command: id -un
+  become: false
+  changed_when: false
+  check_mode: false
+  register: _ssh_login
+
+- name: Look up the accounts
+  ansible.builtin.getent:
+    database: passwd
+
+- name: Look up the members of the SSH group
+  ansible.builtin.getent:
+    database: group
+    key: "{{ ssh_allow_group }}"
+    fail_key: false
+
+- name: Find the SSH keys of the maintenance accounts
+  ansible.builtin.stat:
+    path: "{{ (ansible_facts['getent_passwd'][item.name] | default([''] * 6))[4] | default('/nonexistent', true) }}/.ssh/authorized_keys"
+  loop: "{{ dp.maintenance.users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _ssh_keys
+
+- name: Refuse settings that would lock every maintainer out
+  vars:
+    _ssh_members: "{{ ((ansible_facts['getent_group'][ssh_allow_group] | default(['', '', '']))[2] | default('', true)).split(',') }}"
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.item.name in ansible_facts['getent_passwd']
+      - item.item.name in _ssh_members
+      - item.stat.exists
+      - item.stat.size > 0
+    fail_msg: >-
+      Durcissement SSH interrompu, rien n'a été modifié : le compte de maintenance
+      « {{ item.item.name }} » n'existe pas, n'est pas dans le groupe {{ ssh_allow_group }}
+      ou n'a pas de clé SSH sur le serveur. Après ce durcissement, seuls ces comptes peuvent
+      se connecter : lancez d'abord le rôle maintenance (bootstrap.yml ou system.yml).
+  loop: "{{ _ssh_keys.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Warn that the next runs must use a maintenance account
+  ansible.builtin.debug:
+    msg: >-
+      Attention : vous êtes connecté avec « {{ _ssh_login.stdout }} », qui n'est pas un compte
+      de maintenance. Après ce passage, seuls {{ dp.maintenance.users | map(attribute='name') | join(', ') }}
+      pourront ouvrir une session SSH (clé uniquement, port {{ dp.server.ssh_port }}) : utilisez
+      l'un d'eux pour les prochains passages.
+  when: _ssh_login.stdout not in dp.maintenance.users | map(attribute='name') | list
+
+- name: Apply the SSH settings
+  block:
+    - name: Write the SSH settings
+      ansible.builtin.template:
+        src: sshd_dokopilot.conf.j2
+        dest: "{{ ssh_dropin_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+        validate: /usr/sbin/sshd -t -f %s
+      register: _ssh_dropin
+      notify: Reload ssh
+
+    - name: Check the whole SSH server configuration
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+      check_mode: false
+
+    - name: Remove the backup of the previous SSH settings
+      ansible.builtin.file:
+        path: "{{ _ssh_dropin.backup_file }}"
+        state: absent
+      when: _ssh_dropin.backup_file is defined
+
+  rescue:
+    - name: Restore the previous SSH settings
+      ansible.builtin.copy:
+        src: "{{ _ssh_dropin.backup_file }}"
+        dest: "{{ ssh_dropin_file }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when: _ssh_dropin.backup_file is defined
+
+    - name: Remove the rejected SSH settings
+      ansible.builtin.file:
+        path: "{{ ssh_dropin_file }}"
+        state: absent
+      when:
+        - _ssh_dropin is changed
+        - _ssh_dropin.backup_file is not defined
+
+    - name: Report the invalid SSH configuration
+      ansible.builtin.fail:
+        msg: >-
+          La configuration du serveur SSH est invalide (sshd -t a échoué) : les réglages
+          précédents ont été conservés et le service n'a pas été rechargé. Vérifiez les
+          fichiers de /etc/ssh/sshd_config.d/ sur le serveur.
+
+- name: Keep the SSH server enabled and running
+  ansible.builtin.systemd_service:
+    name: ssh
+    enabled: true
+    state: started

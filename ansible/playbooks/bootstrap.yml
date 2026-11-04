@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# First run, with the initial account given by the hosting provider (bin/dokopilot bootstrap):
+# creates the maintenance accounts and closes SSH to everybody else. Every later run uses a
+# maintenance account.
+- name: Bootstrap the DokoPilot host
+  hosts: dokopilot
+  become: true
+  gather_facts: false
+  pre_tasks:
+    # Some minimal images log in as root without sudo or Python: install them first.
+    - name: Install Python and sudo when they are missing
+      ansible.builtin.raw: >-
+        if command -v python3 >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then echo present;
+        elif [ "$(id -u)" = 0 ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 sudo >/dev/null && echo installed;
+        else echo "python3 et sudo sont requis sur le serveur" >&2; exit 1; fi
+      become: false
+      register: _bootstrap_prerequisites
+      changed_when: "'installed' in _bootstrap_prerequisites.stdout"
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+  roles:
+    - role: config
+    - role: base
+    - role: maintenance
+    - role: ssh
+    - role: fail2ban
+
+  post_tasks:
+    - name: Tell the integrator how to connect from now on
+      ansible.builtin.debug:
+        msg: >-
+          Amorçage terminé. Désormais, connectez-vous uniquement avec un compte de
+          maintenance ({{ dp.maintenance.users | map(attribute='name') | join(', ') }}), par
+          clé SSH sur le port {{ dp.server.ssh_port }} : la connexion root et celle du compte
+          initial de l'hébergeur sont refusées. Lancez ensuite « bin/dokopilot install <client> ».

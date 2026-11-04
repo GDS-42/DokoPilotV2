@@ -1,0 +1,18 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later #}
+# Managed by DokoPilot (Ansible): local changes are overwritten.
+# Read after jail.conf and jail.d/defaults-debian.conf: these values win.
+[DEFAULT]
+banaction = nftables-multiport
+banaction_allports = nftables-allports
+ignoreip = {{ (fail2ban_ignoreip_base + dp.maintenance.ssh_allowed_from
+               + ([fail2ban_tailscale_cidr] if dp.network.mode == 'tailscale' else [])) | unique | join(' ') }}
+
+[sshd]
+enabled = true
+backend = systemd
+journalmatch = {{ fail2ban_sshd_journalmatch }}
+port = {{ dp.server.ssh_port }}
+maxretry = {{ fail2ban_maxretry }}
+findtime = {{ fail2ban_findtime }}
+bantime = {{ fail2ban_bantime }}
+bantime.increment = true

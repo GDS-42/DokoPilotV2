@@ -1,0 +1,115 @@
+# DokoPilot — configuration d'un client (référence commentée)
+#
+# Copiez ce fichier avec `bin/dokopilot init <client>` : il devient
+# clients/<client>/client.yml. Il ne contient AUCUN secret ; les mots de passe
+# et jetons vont dans clients/<client>/secrets.yml.age, chiffré avec age.
+# Toute valeur absente prend la valeur par défaut du profil (voir
+# ansible/roles/config/defaults/main.yml).
+
+# Profil d'installation :
+#   demo        VM locale ou serveur de test, données fictives chargées,
+#               accès possible par le réseau local, plateforme agréée en bac à sable.
+#   production  serveur réel de l'entrepreneur : Tailscale obligatoire,
+#               aucune donnée de test, sauvegarde distante obligatoire.
+profile: demo
+
+client:
+  id: demo                      # identifiant court : minuscules, chiffres, tirets
+  company_name: "Atelier Démo"  # raison sociale telle qu'elle apparaîtra dans Dokos
+  company_abbr: "AD"            # abréviation Dokos (2 à 5 lettres)
+  siren: ""                     # facultatif en démo ; 9 chiffres en production
+  country: France
+  language: fr
+  timezone: Europe/Paris
+  currency: EUR
+  fiscal_year_start: "01-01"    # jour-mois du début d'exercice
+
+# Serveur cible (VPS au nom de l'entrepreneur, ou VM locale)
+server:
+  address: 192.168.122.10       # adresse SSH utilisée par Ansible
+  ssh_port: 22
+  hostname: dokopilot-demo      # nom d'hôte donné à la machine
+  bootstrap_user: debian        # compte initial fourni par l'hébergeur (premier passage seulement)
+
+# Comptes de maintenance : nominatifs, clé SSH uniquement, sudo, jamais root direct
+maintenance:
+  users:
+    - name: integrateur
+      full_name: "Intégrateur"
+      ssh_public_keys:
+        - "ssh-ed25519 AAAA...remplacez-moi integrateur@poste"
+  # Adresses autorisées à joindre le port SSH ; vide = toutes (fail2ban protège)
+  ssh_allowed_from: []
+  sudo_requires_password: true  # mot de passe sudo dans les secrets
+
+# Réseau et exposition
+network:
+  # tailscale : Dokos n'est joignable que par le réseau privé Tailscale (production)
+  # lan       : Dokos est joignable en HTTP depuis les réseaux listés (tests sur VM locale)
+  mode: lan
+  lan:
+    allowed_cidrs:
+      - 192.168.0.0/16
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+  tailscale:
+    hostname: dokos-demo        # nom de la machine dans le réseau Tailscale
+    advertise_tags: []          # ex. ["tag:dokopilot"] si vos ACL utilisent des étiquettes
+
+# Dokos et ses applications
+dokos:
+  site_name: erp.demo.local     # nom interne du site Dokos
+  admin_email: admin@demo.local
+  # Les versions exactes (image, applications) sont figées dans
+  # ansible/roles/dokos/defaults/main.yml ; ne les changez ici qu'en connaissance de cause.
+
+# Personnes et assistants
+users:
+  entrepreneur:
+    email: dirigeant@demo.local
+    first_name: Camille
+    last_name: Martin
+  # Chaque personne qui utilise un agent reçoit un utilisateur « assistant » dans Dokos :
+  # il peut lire et préparer des brouillons, jamais valider, annuler ni supprimer.
+  assistants:
+    - for: dirigeant@demo.local
+      email: assistant.dirigeant@demo.local
+
+# Dokos AI (serveur MCP intégré à Dokos)
+dokos_ai:
+  mcp_allow_writes: true        # autorise la création de brouillons par les assistants
+  # Fournisseurs de modèles utilisés DANS Dokos (pipelines) ; les clés vont dans les secrets.
+  providers: []
+
+# Facturation électronique (application eTransactions, plateforme agréée Super PDP)
+etransactions:
+  enabled: true
+  environment: sandbox          # sandbox | production
+
+# Banque : les relevés (OFX, CSV, MT940) sont importés dans Dokos ; la synchronisation
+# bancaire automatique de l'application bank n'est disponible que sur Dokos Cloud.
+
+# Sauvegardes chiffrées (restic)
+backup:
+  # Dépôt restic : chemin local (démo) ou distant, ex. s3:https://s3.fr-par.scw.cloud/mon-bucket/dokopilot
+  repository: /var/backups/dokopilot/restic
+  schedule: "*-*-* 02:30:00"    # format systemd OnCalendar
+  keep: { daily: 7, weekly: 4, monthly: 12 }
+
+# Poste de l'entrepreneur : harnais d'agent et connecteurs
+harness:
+  default: opencode             # opencode | claude-code
+  enabled: [opencode, claude-code]
+  mail:
+    enabled: false
+    imap_host: ""
+    smtp_host: ""
+    username: ""
+  calendar:
+    enabled: false
+    caldav_url: ""
+    username: ""
+
+# Données de test (profil demo uniquement)
+demo:
+  load_test_data: true

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Test playbook: the proxy role on its own (in site.yml it runs once Dokos is up).
+- name: Publish Dokos
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+    - role: proxy
+  post_tasks:
+    - name: Print the address of Dokos
+      ansible.builtin.debug:
+        msg: "dokopilot_dokos_url={{ dokopilot_dokos_url }}"

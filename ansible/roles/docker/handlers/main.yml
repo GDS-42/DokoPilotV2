@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# live-restore keeps the containers running while the daemon restarts.
+- name: Restart docker
+  ansible.builtin.systemd_service:
+    name: docker
+    state: restarted

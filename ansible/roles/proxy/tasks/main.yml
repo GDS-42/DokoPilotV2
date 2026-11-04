@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Publishes Dokos (proxy_backend, 127.0.0.1:8080 by default) and sets dokopilot_dokos_url
+# for the final summary. Runs after the Dokos stack is up (site.yml), and also on its own.
+
+- name: Publish Dokos on the local network with Caddy
+  ansible.builtin.include_tasks: lan.yml
+  when: dp.network.mode == 'lan'
+
+- name: Publish Dokos on the Tailscale network
+  ansible.builtin.include_tasks: tailscale.yml
+  when: dp.network.mode == 'tailscale'

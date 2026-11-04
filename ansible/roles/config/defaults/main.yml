@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Defaults of every client setting. The effective configuration is
+#   dokopilot_defaults <- dokopilot_profile_defaults[profile] <- clients/<id>/client.yml
+# merged recursively by tasks/main.yml into the fact `dp`. Roles only read `dp`.
+
+dokopilot_defaults:
+  profile: demo
+  client:
+    id: ""
+    company_name: ""
+    company_abbr: ""
+    siren: ""
+    country: France
+    language: fr
+    timezone: Europe/Paris
+    currency: EUR
+    fiscal_year_start: "01-01"
+  server:
+    address: ""
+    ssh_port: 22
+    hostname: ""
+    bootstrap_user: root
+  maintenance:
+    users: []
+    ssh_allowed_from: []
+    sudo_requires_password: true
+  network:
+    mode: tailscale
+    lan:
+      allowed_cidrs:
+        - 192.168.0.0/16
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+    tailscale:
+      hostname: ""
+      advertise_tags: []
+      https: true
+  dokos:
+    site_name: ""
+    admin_email: ""
+  users:
+    entrepreneur:
+      email: ""
+      first_name: ""
+      last_name: ""
+    assistants: []
+  dokos_ai:
+    mcp_allow_writes: true
+    providers: []
+  etransactions:
+    enabled: true
+    environment: sandbox
+  backup:
+    repository: ""
+    schedule: "*-*-* 02:30:00"
+    keep:
+      daily: 7
+      weekly: 4
+      monthly: 12
+  harness:
+    default: opencode
+    enabled: [opencode, claude-code]
+    mail:
+      enabled: false
+      imap_host: ""
+      smtp_host: ""
+      username: ""
+    calendar:
+      enabled: false
+      caldav_url: ""
+      username: ""
+  demo:
+    load_test_data: false
+
+dokopilot_profile_defaults:
+  demo:
+    network:
+      mode: lan
+    backup:
+      repository: /var/backups/dokopilot/restic
+    demo:
+      load_test_data: true
+  production:
+    network:
+      mode: tailscale
+    etransactions:
+      environment: production
+    demo:
+      load_test_data: false
+
+# Secrets that must be present (non-empty and not "generate") before any change.
+dokopilot_required_secrets:
+  - db_root_password
+  - dokos_admin_password
+  - entrepreneur_password
+  - restic_password
+
+# Accepted SSH public key formats (the example placeholder of client.example.yml does not match).
+dokopilot_ssh_key_regex: >-
+  ^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com|ssh-rsa) [A-Za-z0-9+/=]{40,}
+
+# Private ranges accepted for network.lan.allowed_cidrs: RFC 1918, CGNAT (Tailscale), IPv6 ULA.
+dokopilot_private_cidr_regex: '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|f[cd][0-9a-f]{2}:)'
+
+# The Dokos frontend container publishes on 127.0.0.1 only, on this port; the reverse proxy
+# (Caddy in lan mode, tailscale serve in tailscale mode) forwards to it.
+dokopilot_dokos_http_port: 8080

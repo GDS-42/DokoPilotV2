@@ -1,0 +1,6 @@
+# Production never loads test data.
+# expect: aucune donnée de test
+profile: production
+client: { siren: "123456789" }
+backup: { repository: "s3:https://s3.example.test/bucket/dokopilot" }
+demo: { load_test_data: true }

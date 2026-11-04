@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Publication of Dokos, which listens on 127.0.0.1 only:
+#   lan mode (demo)        Caddy (Debian package) on port 80, filtered by the firewall
+#   tailscale mode         `tailscale serve`, HTTPS on the MagicDNS name; Caddy is stopped
+
+proxy_backend_port: "{{ dokopilot_dokos_http_port | default(8080) }}"
+proxy_backend: "127.0.0.1:{{ proxy_backend_port }}"
+
+proxy_caddyfile: /etc/caddy/Caddyfile
+# Idle timeout of the Socket.IO (websocket) connections; Socket.IO pings every 25 s.
+proxy_websocket_timeout: 1h
+
+# `tailscale serve` waits forever when HTTPS is not enabled in the tailnet: give up after this.
+proxy_tailscale_serve_timeout: 120

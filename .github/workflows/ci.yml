@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: "Also run the Dokos stack test (long)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-fast-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Workstation tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age shellcheck
+      - name: Setup
+        run: make setup
+      - name: Lint
+        run: make lint
+      - name: Configuration tests
+        run: make test
+
+  system-roles:
+    runs-on: ubuntu-24.04
+    needs: lint-and-fast-tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Setup
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age && make setup
+      - name: System roles against a Debian 13 systemd container
+        run: make test-system
+
+  dokos-stack:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.stack)
+    runs-on: ubuntu-24.04
+    needs: lint-and-fast-tests
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Setup
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age && make setup
+      - name: Dokos stack, provisioning, demo data and permission tests
+        run: make test-stack

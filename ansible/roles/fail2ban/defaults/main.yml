@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# fail2ban on SSH. Bans go to fail2ban's own nftables table, next to ours.
+
+fail2ban_jail_file: /etc/fail2ban/jail.d/dokopilot.local
+fail2ban_maxretry: 5
+fail2ban_findtime: 10m
+fail2ban_bantime: 1h
+fail2ban_ignoreip_base:
+  - 127.0.0.1/8
+  - ::1
+# Tailscale addresses (CGNAT range) are never banned in tailscale mode.
+fail2ban_tailscale_cidr: 100.64.0.0/10
+# Debian's defaults-debian.conf matches only _COMM=sshd, but OpenSSH 10 (Debian 13) logs the
+# authentication failures from sshd-session: without it the jail never sees them.
+fail2ban_sshd_journalmatch: _SYSTEMD_UNIT=ssh.service + _COMM=sshd + _COMM=sshd-session

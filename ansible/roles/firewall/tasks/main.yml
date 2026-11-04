@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Input firewall in the table `inet dokopilot`, policy drop. The forward path is left to
+# Docker; the Dokos containers publish on 127.0.0.1 only.
+
+- name: Install nftables
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+
+- name: Find the address of the current SSH client
+  ansible.builtin.command: printenv SSH_CONNECTION
+  become: false
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  register: _fw_ssh_connection
+
+- name: Check that the current SSH client stays allowed
+  vars:
+    _fw_client_ip: "{{ _fw_ssh_connection.stdout.split(' ') | first }}"
+    _fw_allowed: "{{ dp.maintenance.ssh_allowed_from + (firewall_tailscale_cidrs if dp.network.mode == 'tailscale' else []) }}"
+    _fw_check: >-
+      import ipaddress, sys;
+      ip = ipaddress.ip_address(sys.argv[1]);
+      sys.exit(0 if any(ip in ipaddress.ip_network(n, strict=False) for n in sys.argv[2:]) else 1)
+  ansible.builtin.command:
+    argv: "{{ ['/usr/bin/python3', '-c', _fw_check, _fw_client_ip] + _fw_allowed }}"
+  register: _fw_client_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - dp.maintenance.ssh_allowed_from | length > 0
+    - _fw_ssh_connection.rc == 0
+    - _fw_ssh_connection.stdout | length > 0
+
+- name: Refuse rules that would lock out the current SSH client
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _fw_client_check is skipped or _fw_client_check.rc == 0
+    fail_msg: >-
+      Pare-feu non appliqué, rien n'a été modifié : votre adresse actuelle
+      ({{ _fw_ssh_connection.stdout.split(' ') | first }}) ne fait pas partie de
+      maintenance.ssh_allowed_from ({{ dp.maintenance.ssh_allowed_from | join(', ') }}) ; vous
+      ne pourriez plus vous reconnecter en SSH. Ajoutez-la à la liste, ou videz la liste.
+
+- name: Create the nftables service drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/nftables.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Debian's nftables.service runs "nft flush ruleset" when it stops, which would also wipe the
+# Docker, Tailscale and fail2ban tables. Stopping it removes our table only.
+- name: Make nftables.service remove only our table when it stops
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nftables.service.d/dokopilot.conf
+    content: |
+      # Managed by DokoPilot (Ansible): local changes are overwritten.
+      [Service]
+      ExecStop=
+      ExecStop=-/usr/sbin/nft delete table inet {{ firewall_table }}
+    owner: root
+    group: root
+    mode: "0644"
+  register: _fw_unit_dropin
+
+- name: Write the firewall rules
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: "{{ firewall_config_file }}"
+    owner: root
+    group: root
+    mode: "0755"
+    validate: /usr/sbin/nft -c -f %s
+  notify: Reload nftables
+
+- name: Load the firewall rules now and at boot
+  ansible.builtin.systemd_service:
+    name: nftables
+    enabled: true
+    state: started
+    daemon_reload: "{{ _fw_unit_dropin is changed }}"
