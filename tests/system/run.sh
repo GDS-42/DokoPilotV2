@@ -517,9 +517,12 @@ EOF
   on_server docker rm -f dokos-stub >/dev/null
   # Test only: Docker Hub rate-limits shared addresses; reuse the database and cache images
   # of this machine when it has them (same digests as the role defaults).
+  # A loaded image has no name: tag it, then it resolves by its digest as the role asks.
   while IFS= read -r ref; do
-    if docker image inspect "$ref" >/dev/null 2>&1; then
-      docker save "$ref" | on_server_stdin docker load --quiet >/dev/null
+    digest="${ref##*@}"
+    if docker image inspect "${ref%%:*}@$digest" >/dev/null 2>&1; then
+      docker save "${ref%%:*}@$digest" | on_server_stdin docker load --quiet >/dev/null
+      on_server docker tag "$digest" "${ref%@*}"
       if on_server docker image inspect "$ref" >/dev/null 2>&1; then
         ok "image $ref preloaded from this machine"
       fi
