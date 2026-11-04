@@ -1,0 +1,32 @@
+# Client configurations hold personal data: keep them in a private repository.
+# Only the demo client is versioned here.
+clients/*
+!clients/README.md
+!clients/demo/
+clients/demo/client.local.yml
+clients/demo/secrets.yml.age
+clients/demo/recipients.txt
+
+# Generated files and local tools
+.venv/
+.collections/
+.generated/
+*.retry
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Secrets in clear text never go into Git
+*.decrypted.yml
+.env
+.env.*
+!.env.example
+*.agekey
+keys.txt
+
+# Operating systems and editors
+.DS_Store
+*.swp
+.idea/
+.vscode/
