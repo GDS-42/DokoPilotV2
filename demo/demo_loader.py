@@ -243,6 +243,23 @@ class Loader:
                     "is_default": 1,
                 }
             ).insert().name
+        # Dokos posts each Payment Entry in an accounting journal; the setup wizard only
+        # creates the bank journal when it is given a bank account (company_setup.py,
+        # create_accounting_journals), so the demo adds it the same way.
+        if frappe.db.exists("DocType", "Accounting Journal") and not frappe.db.exists(
+            "Accounting Journal", {"company": self.company, "account": gl_account}
+        ):
+            frappe.get_doc(
+                {
+                    "doctype": "Accounting Journal",
+                    "journal_code": "BQ",
+                    "journal_name": bank["nom"],
+                    "type": "Bank",
+                    "company": self.company,
+                    "account": gl_account,
+                    "conditions": [{"document_type": "Payment Entry"}],
+                }
+            ).insert()
         # Wire transfers default to this bank account, as an accountant would set it.
         if frappe.db.exists("Mode of Payment", "Wire Transfer"):
             mode = frappe.get_doc("Mode of Payment", "Wire Transfer")
