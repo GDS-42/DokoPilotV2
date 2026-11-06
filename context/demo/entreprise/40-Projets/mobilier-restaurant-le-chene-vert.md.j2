@@ -1,0 +1,42 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{%- set customer = 'Restaurant Démo Le Chêne Vert' -%}
+---
+type: projet
+statut: actif
+sensibilite: interne
+fonction: commercial
+projet: mobilier-restaurant-le-chene-vert
+verifie: {{ context_date }}
+fraicheur: mensuelle
+sources:
+  - "[Client dans Dokos]({{ context_dokos_link }}/app/customer/{{ customer | urlencode }})"
+---
+# Projet : mobilier du Restaurant Démo Le Chêne Vert
+
+| Élément | Valeur |
+| --- | --- |
+| Objectif | meubler la salle du restaurant : deux tables posées, puis huit chaises assorties |
+| Responsable | {{ (context_dirigeant.first_name ~ ' ' ~ context_dirigeant.last_name) | trim }} |
+| État | en cours de clôture : il reste à saisir le dernier paiement |
+| Documents de Dokos | [fiche du client]({{ context_dokos_link }}/app/customer/{{ customer | urlencode }}), ses factures de vente (liste filtrée sur le client) |
+
+## Étapes
+
+- [x] Deux tables de salle à manger en chêne et quatre heures de pose — facturées 3 744,00 € TTC,
+  payées par virement.
+- [x] Huit chaises en chêne — facturées 2 688,00 € TTC, échéance non encore passée.
+- [ ] Saisir le paiement des chaises : le virement « VIR SEPA RESTAURANT DEMO LE CHENE VERT
+  8 CHAISES » est sur le relevé, le paiement n'est pas encore dans Dokos. L'agent le prépare en
+  brouillon lors du rapprochement bancaire, {{ context_dirigeant.first_name }} le valide.
+- [ ] Bilan du projet, puis archivage (ce qui en reste de durable devient une note permanente).
+
+## Journal
+
+- {{ context_date }} : projet repris dans le contexte à l'installation de la démonstration.
+
+## Liens
+
+- Carte : [Du devis au paiement](../30-Cartes/carte-du-devis-au-paiement.md)
+- Note : [Les factures clients sont payables à 30 jours](../20-Notes-permanentes/factures-clients-a-30-jours.md)
+  — pourquoi ce client ne doit pas être relancé.
+- Fonction : [Commercial](../50-Fonctions/commercial/README.md)

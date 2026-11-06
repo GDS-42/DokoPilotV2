@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Preinstalled context (C-3): renders the templates of context/ with the client's values and
+# pushes them, as one first commit authored by « DokoPilot », into each context repository
+# that is still EMPTY. A repository that already has a commit is never touched (D-28).
+
+# --- Shared with the forgejo role (same defaults; override them together)
+dokopilot_forgejo_dir: /opt/dokopilot/forgejo
+dokopilot_forgejo_http_port: 3001
+forgejo_assistant_prefix: assistant-
+
+# Templates of this repository: context/{entreprise,direction,perso} and context/demo/<repo>
+# (Atelier Démo content, only when dp.demo.load_test_data). Files named *.j2 are rendered
+# (the suffix is dropped); other files are copied as they are.
+context_source_dir: "{{ role_path }}/../../../context"
+# Files of the template folders that are never deposited.
+context_exclude: '^(__pycache__|.*\.pyc|.*~|.*\.swp|\.DS_Store)$'
+
+# First commit
+context_author_name: DokoPilot
+context_author_email: "dokopilot@{{ dp.client.id }}.dokopilot.internal"
+context_commit_message: Contexte initial préparé par DokoPilot
+context_branch: main
+
+# Address of Dokos in the links of the context. Empty: dokopilot_dokos_url (proxy role)
+# when known, otherwise the scheme and host of dokopilot_forgejo_url (same server).
+context_dokos_url: ""
+
+# The eight functions of a small company (50-Fonctions/<id>/), in this order.
+context_functions:
+  - { id: direction, label: Direction }
+  - { id: commercial, label: Commercial }
+  - { id: achats, label: Achats }
+  - { id: comptabilite-finance, label: Comptabilité et finance }
+  - { id: production, label: Production }
+  - { id: rh, label: Ressources humaines }
+  - { id: administratif-juridique, label: Administratif et juridique }
+  - { id: communication, label: Communication }

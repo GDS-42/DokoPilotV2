@@ -1,0 +1,35 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+---
+type: note
+statut: actif
+sensibilite: interne
+fonction: comptabilite-finance
+projet: ""
+verifie: {{ context_date }}
+fraicheur: annuelle
+sources:
+  - "Données de démonstration DokoPilot (docs/donnees-de-test.md)"
+---
+# Les factures clients sont payables à 30 jours et se relancent dès l'échéance passée
+
+{{ context_company }} facture ses clients à 30 jours, TVA à 20 %. Une facture échue et impayée est
+relancée sans attendre, par un courriel préparé en brouillon et envoyé par
+{{ context_dirigeant.first_name }} ; le ton monte d'une relance à l'autre. Avant de relancer, on vérifie
+dans le relevé bancaire que le client n'a pas déjà payé.
+
+## D'où cela vient
+
+- Dans Dokos, les factures de vente ont une échéance à 30 jours ; la balance âgée
+  (`run_report`) donne les retards.
+- La démo compte trois retards : Hôtel Démo des Tilleuls, Mairie de Démoville (secteur public,
+  qui paie par mandat administratif) et le reste dû par le Cabinet Démo Dentaire après un acompte.
+- Le Restaurant Démo Le Chêne Vert a payé sa dernière facture par virement avant que le
+  paiement soit saisi : la relancer serait une erreur
+  ([projet Mobilier du Restaurant Démo Le Chêne Vert](../40-Projets/mobilier-restaurant-le-chene-vert.md)).
+
+## Liens
+
+- Carte : [Du devis au paiement](../30-Cartes/carte-du-devis-au-paiement.md)
+- Voir aussi : [Une facture fournisseur se contrôle avant d'être saisie](controler-les-factures-fournisseurs.md)
+  — l'autre moitié du cycle, côté achats.
+- Procédures : `dokopilot-relances-clients`, `dokopilot-rapprochement-bancaire`.

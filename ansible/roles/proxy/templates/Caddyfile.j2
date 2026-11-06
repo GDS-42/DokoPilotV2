@@ -36,3 +36,21 @@ http://:80 {
 		}
 	}
 }
+{% if dp.context.enabled | bool %}
+
+# Forgejo (context repositories): plain HTTP on port {{ proxy_forgejo_lan_port }}, from the same private
+# ranges as Dokos (firewall). Git clones and pushes go through here.
+http://:{{ proxy_forgejo_lan_port }} {
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	reverse_proxy {{ proxy_forgejo_backend }} {
+		header_up Host {host}
+	}
+}
+{% endif %}

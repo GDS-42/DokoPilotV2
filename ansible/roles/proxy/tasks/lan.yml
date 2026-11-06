@@ -25,3 +25,11 @@
 - name: Keep the address of Dokos for the summary
   ansible.builtin.set_fact:
     dokopilot_dokos_url: "http://{{ dp.server.address | default(ansible_host, true) }}"
+
+- name: Keep the address of Forgejo (context repositories)
+  ansible.builtin.include_role:
+    name: forgejo
+    tasks_from: url
+  when:
+    - dp.context.enabled | bool
+    - dokopilot_forgejo_url is not defined

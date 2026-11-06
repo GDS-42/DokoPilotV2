@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Forgejo and the preinstalled context (docs/plan-v0.2.md C-2 and C-3): accounts,
+# organisation, teams and repositories, then the first commit of each context repository
+# that is still empty (never an overwrite). Runs once the system (Docker) is installed;
+# site.yml imports it. Publication (Caddy, tailscale serve) is done by the proxy role.
+- name: Forgejo and the context repositories
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+    - role: forgejo
+      when: dp.context.enabled | bool
+    - role: context
+      when: dp.context.enabled | bool

@@ -12,3 +12,11 @@ proxy_websocket_timeout: 1h
 
 # `tailscale serve` waits forever when HTTPS is not enabled in the tailnet: give up after this.
 proxy_tailscale_serve_timeout: 120
+
+# Forgejo (context repositories, docs/plan-v0.2.md C-2), published when dp.context.enabled:
+#   lan mode        Caddy on port 3000 (same private ranges as Dokos, firewall role)
+#   tailscale mode  a second `tailscale serve`, HTTPS on port 8443 of the MagicDNS name
+# The container listens on 127.0.0.1:3001 (forgejo role).
+proxy_forgejo_backend: "127.0.0.1:{{ dokopilot_forgejo_http_port | default(3001) }}"
+proxy_forgejo_lan_port: "{{ dokopilot_forgejo_lan_port | default(3000) }}"
+proxy_forgejo_tailscale_port: "{{ dokopilot_forgejo_tailscale_port | default(8443) }}"

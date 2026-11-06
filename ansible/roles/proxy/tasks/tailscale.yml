@@ -36,17 +36,20 @@
   changed_when: false
   check_mode: false
 
+# The port of Forgejo (second publication, below) is left out of this comparison.
 - name: Compare the publication with the expected one
   vars:
     _port: "{{ '443' if dp.network.tailscale.https else '80' }}"
     _kind: "{{ 'HTTPS' if dp.network.tailscale.https else 'HTTP' }}"
+    _forgejo_port: "{{ proxy_forgejo_tailscale_port | string }}"
     _cfg: "{{ _proxy_serve_status.stdout | from_json if _proxy_serve_status.stdout is match('\\s*\\{') else {} }}"
-    _web: "{{ (_cfg.Web | default({})).values() | list }}"
+    _tcp: "{{ _cfg.TCP | default({}) | dict2items | rejectattr('key', 'eq', _forgejo_port) | items2dict }}"
+    _web: "{{ _cfg.Web | default({}) | dict2items | rejectattr('key', 'search', ':' ~ _forgejo_port ~ '$') | map(attribute='value') | list }}"
   ansible.builtin.set_fact:
     _proxy_serve_port: "{{ _port }}"
     _proxy_serve_ok: >-
-      {{ (_cfg.TCP | default({}) | list) == [_port]
-         and (_cfg.TCP[_port][_kind] | default(false)) | bool
+      {{ (_tcp | list) == [_port]
+         and (_tcp[_port][_kind] | default(false)) | bool
          and _web | length == 1
          and (_web[0].Handlers | default({}) | list) == ['/']
          and _web[0].Handlers['/'].Proxy | default('') == 'http://' ~ proxy_backend }}
@@ -83,3 +86,70 @@
     _dnsname: "{{ (_proxy_ts_status.stdout | from_json).Self.DNSName | regex_replace('\\.$', '') }}"
   ansible.builtin.set_fact:
     dokopilot_dokos_url: "{{ ('https://' if dp.network.tailscale.https else 'http://') ~ _dnsname }}"
+
+# --- Forgejo (context repositories): second publication, on its own port. Runs after the
+# Dokos part, whose reset also removes it.
+- name: Read the publication of Forgejo
+  ansible.builtin.command: tailscale serve status --json
+  register: _proxy_forgejo_serve_status
+  changed_when: false
+  check_mode: false
+
+- name: Compare the publication of Forgejo with the expected one
+  vars:
+    _port: "{{ proxy_forgejo_tailscale_port | string }}"
+    _kind: "{{ 'HTTPS' if dp.network.tailscale.https else 'HTTP' }}"
+    _cfg: "{{ _proxy_forgejo_serve_status.stdout | from_json if _proxy_forgejo_serve_status.stdout is match('\\s*\\{') else {} }}"
+    _web: "{{ _cfg.Web | default({}) | dict2items | selectattr('key', 'search', ':' ~ _port ~ '$') | map(attribute='value') | list }}"
+  ansible.builtin.set_fact:
+    _proxy_forgejo_published: "{{ _port in (_cfg.TCP | default({})) }}"
+    _proxy_forgejo_serve_ok: >-
+      {{ (_cfg.TCP[_port][_kind] | default(false)) | bool
+         and _web | length == 1
+         and (_web[0].Handlers | default({}) | list) == ['/']
+         and _web[0].Handlers['/'].Proxy | default('') == 'http://' ~ proxy_forgejo_backend }}
+
+- name: Publish Forgejo with tailscale serve
+  when:
+    - dp.context.enabled | bool
+    - not _proxy_forgejo_serve_ok | bool
+  block:
+    - name: Publish Forgejo on the Tailscale network
+      ansible.builtin.command:
+        argv:
+          - tailscale
+          - serve
+          - --bg
+          - --yes
+          - "{{ ('--https=' if dp.network.tailscale.https else '--http=') ~ proxy_forgejo_tailscale_port }}"
+          - "http://{{ proxy_forgejo_backend }}"
+      changed_when: true
+      timeout: "{{ proxy_tailscale_serve_timeout }}"
+
+  rescue:
+    - name: Report the refused publication of Forgejo
+      ansible.builtin.fail:
+        msg: >-
+          tailscale serve n'a pas pu publier Forgejo sur le port {{ proxy_forgejo_tailscale_port }}.
+          Vérifiez dans la console Tailscale que les certificats HTTPS et Serve sont autorisés
+          pour ce serveur, puis relancez l'installation. Détail : {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default('')) }}
+
+- name: Withdraw the publication of Forgejo (context disabled)
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - serve
+      - "{{ ('--https=' if dp.network.tailscale.https else '--http=') ~ proxy_forgejo_tailscale_port }}"
+      - "off"
+  changed_when: true
+  when:
+    - not dp.context.enabled | bool
+    - _proxy_forgejo_published | bool
+
+- name: Keep the address of Forgejo (context repositories)
+  ansible.builtin.include_role:
+    name: forgejo
+    tasks_from: url
+  when:
+    - dp.context.enabled | bool
+    - dokopilot_forgejo_url is not defined

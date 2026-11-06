@@ -1,0 +1,39 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+---
+type: note
+statut: actif
+sensibilite: interne
+fonction: achats
+projet: ""
+verifie: {{ context_date }}
+fraicheur: stable
+sources:
+  - "[Fonction Achats](../50-Fonctions/achats/README.md)"
+  - "Données de démonstration DokoPilot (docs/donnees-de-test.md)"
+---
+# Une facture fournisseur se contrôle contre la commande et la réception avant d'être saisie
+
+Chaque facture électronique reçue (`Supplier Invoice`, créée par eTransactions) est comparée,
+ligne par ligne, à la commande qu'elle cite pour les **prix** et à la réception pour les
+**quantités**. Seule une facture conforme devient une facture d'achat en brouillon, que
+{{ context_dirigeant.first_name }} vérifie et valide dans Dokos. Un écart n'est jamais accepté en silence :
+il est signalé au fournisseur, qui envoie un avoir ou une facture corrigée.
+
+## D'où cela vient
+
+- Deux factures de la démo le montrent : celle de Panneaux Démo Bois (n° PDB-11872) facture les
+  panneaux 42,00 € au lieu des 38,50 € commandés ; celle de Quincaillerie Démo Pro
+  (n° QDP-F-30512) facture des vis qui ne sont pas encore reçues.
+- Le numéro de commande se lit sur la facture électronique (champ « Bon de commande ») :
+  eTransactions ne le reporte pas sur la facture fournisseur, le rapprochement est à faire.
+- Une prestation sans commande (transport, entretien) se contrôle contre le service rendu et
+  s'impute au compte de charge choisi avec {{ context_dirigeant.first_name }}.
+
+## Liens
+
+- Carte : [Du devis au paiement](../30-Cartes/carte-du-devis-au-paiement.md)
+- Voir aussi : [Les factures clients sont payables à 30 jours](factures-clients-a-30-jours.md) — le
+  même soin, côté ventes : une facture juste est payée plus vite.
+- Fonction : [Achats](../50-Fonctions/achats/README.md) — les fournisseurs et la routine de
+  traitement des factures reçues.
+- Procédure : `dokopilot-factures-fournisseurs`.

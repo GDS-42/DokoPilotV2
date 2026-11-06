@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# What the provisioning script derives the accounts, repositories and rights from (C-2):
+# the people of dp.users.people, the direction switch and the role settings. No secret here.
+
+- name: Describe the people and the settings of the context repositories
+  ansible.builtin.set_fact:
+    forgejo_model:
+      org:
+        name: "{{ dp.client.id }}"
+        full_name: "{{ dp.client.company_name }}"
+      people: "{{ dp.users.people }}"
+      direction: "{{ dp.context.direction | bool }}"
+      default_branch: "{{ forgejo_default_branch }}"
+      credentials_dir: "{{ forgejo_credentials_dir }}"
+      password_length: "{{ forgejo_password_length | int }}"
+      token:
+        name: "{{ forgejo_token_name }}"
+        scopes: "{{ forgejo_token_scopes }}"
+      app_ini: /var/lib/gitea/custom/conf/app.ini
+      settings:
+        assistant_prefix: "{{ forgejo_assistant_prefix }}"
+        assistant_full_name: "{{ forgejo_assistant_full_name }}"
+        people_must_change_password: "{{ forgejo_people_must_change_password | bool }}"
+        assistants_restricted: "{{ forgejo_assistants_restricted | bool }}"
+        team_members: "{{ forgejo_team_members }}"
+        team_direction: "{{ forgejo_team_direction }}"
+        team_units: "{{ forgejo_team_units }}"
+        repo_descriptions: "{{ forgejo_repo_descriptions }}"

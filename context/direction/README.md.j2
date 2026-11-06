@@ -1,0 +1,12 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+# Direction de {{ context_company }}
+
+Le contexte **confidentiel** de la direction : ressources humaines, rémunérations, stratégie,
+affaires juridiques. Accès : le dirigeant et son assistant seulement (équipe `direction` du
+dépôt `{{ context_org }}/direction` dans Forgejo).
+
+- Sur le poste du dirigeant, ce dépôt est copié dans `~/DokoPilot/{{ context_org }}/direction/`.
+- L'agent n'y écrit qu'avec l'accord explicite du dirigeant, pour chaque modification
+  ([`AGENTS.md`](AGENTS.md)) ; il ne pousse jamais : le dirigeant envoie les modifications avec
+  `bin/dokopilot sync`.
+- Rien de ce qui est ici ne se recopie dans le dépôt `entreprise`.

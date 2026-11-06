@@ -1,0 +1,15 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+# 10 — Sources
+
+Les ressources datées que l'entreprise garde parce qu'elles servent : un résumé de
+réglementation, la fiche d'un salon, le compte rendu d'une lecture, les conditions générales
+d'un fournisseur. Une source dit **d'où vient** l'information et **quand** elle a été lue.
+
+- Une note par source, faite avec [`90-Modeles/source.md`](../90-Modeles/source.md) :
+  `AAAA-MM-JJ-titre-court.md`.
+- Résumez avec vos mots et notez la référence (adresse web, document, auteur, date) ; ne
+  recopiez pas un document entier, et jamais un document soumis à des droits.
+- Ce qui en ressort de durable devient une note permanente dans `20-Notes-permanentes/`, qui
+  cite la source dans sa propriété `sources`.
+- Une source datée vieillit : renseignez `fraicheur` (souvent `annuelle` pour une règle,
+  `mensuelle` pour un tarif).

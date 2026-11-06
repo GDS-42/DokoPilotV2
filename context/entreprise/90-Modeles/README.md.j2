@@ -1,0 +1,39 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+# 90 — Modèles
+
+Les modèles de notes. Copiez le modèle qui convient, renommez-le, puis remplissez ses propriétés
+et son texte. L'agent part toujours d'un de ces modèles.
+
+| Modèle | Pour | Rangé dans |
+| --- | --- | --- |
+| [`note.md`](note.md) | une idée durable | `20-Notes-permanentes/` |
+| [`source.md`](source.md) | une ressource datée et son résumé | `10-Sources/` |
+| [`carte.md`](carte.md) | le point d'entrée d'un sujet | `30-Cartes/` |
+| [`projet.md`](projet.md) | un travail avec un début et une fin | `40-Projets/` |
+| [`fonction.md`](fonction.md) | la fiche d'une fonction | `50-Fonctions/<fonction>/README.md` |
+| [`compte-rendu.md`](compte-rendu.md) | une réunion, un échange | avec son projet ou sa fonction |
+| [`decision.md`](decision.md) | une décision et ses raisons | avec son projet ou sa fonction |
+
+## Propriétés
+
+Chaque note commence par ses propriétés, entre deux lignes `---` (format YAML) :
+
+| Propriété | Valeurs | Sens |
+| --- | --- | --- |
+| `type` | `note`, `source`, `carte`, `projet`, `fonction`, `compte-rendu`, `decision`, `fiche`, `brouillon` | la sorte de note |
+| `statut` | `brouillon`, `actif`, `en-attente`, `termine`, `archive` | où en est la note |
+| `sensibilite` | `publique`, `interne`, `confidentielle` | qui peut la lire ; `confidentielle` seulement dans `direction` |
+| `fonction` | {% for f in context_functions %}`{{ f.id }}`{{ ', ' if not loop.last else '' }}{% endfor %} | la fonction concernée (vide si aucune) |
+| `projet` | le nom du fichier du projet, sans `.md` | le projet concerné (vide si aucun) |
+| `verifie` | `AAAA-MM-JJ` | la date de la dernière vérification |
+| `fraicheur` | `stable`, `annuelle`, `trimestrielle`, `mensuelle` | à quel rythme la revoir |
+| `sources` | une liste : liens vers des notes, des documents de Dokos, des pages | d'où vient ce qui est écrit |
+
+## Règles d'écriture
+
+- Noms de fichiers en minuscules, avec des tirets, sans accent ; dates ISO (`2026-11-06-…`).
+- Une idée par note permanente, au moins deux liens, un rattachement à une carte.
+- Liens Markdown relatifs : `[Titre](../20-Notes-permanentes/nom-de-la-note.md)`.
+- Un document de Dokos se cite par son lien ou son identifiant (`Customer/CUST-0001`), jamais par
+  une copie de son contenu.
+- Ni secret, ni donnée personnelle de clients ou de salariés.

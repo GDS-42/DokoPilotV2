@@ -1,0 +1,69 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+---
+type: fiche
+statut: actif
+sensibilite: interne
+fonction: comptabilite-finance
+projet: ""
+verifie: {{ context_date }}
+fraicheur: annuelle
+sources:
+  - "Installation DokoPilot ({{ context_date }}) : Dokos v5, Dokos AI, eTransactions"
+---
+# Dokos
+
+Dokos est le logiciel de gestion (ERP) de {{ context_company }}. Il est la **seule référence** pour
+les tiers, les articles, les ventes, les achats, le stock, la comptabilité et les factures
+électroniques : les notes de ce dépôt le citent, elles ne le recopient pas.
+
+| Élément | Valeur |
+| --- | --- |
+| Adresse | {{ context_dokos_link }} (réseau privé de l'entreprise) |
+| Société | {{ context_company }} |
+| Applications | Dokos (gestion, comptabilité française), eTransactions (factures électroniques, plateforme agréée Super PDP), Dokos AI (serveur MCP des agents) |
+| Accès des agents | serveur MCP `dokos`, sous l'identité d'un utilisateur assistant ; pour l'instant, seul l'assistant du dirigeant ({{ (context_dirigeant.first_name ~ ' ' ~ context_dirigeant.last_name) | trim }}) en a un. Les autres personnes ont leur propre compte Dokos, créé par le dirigeant avec les rôles qui conviennent, et leurs agents ne lisent pas Dokos |
+
+## Ce qu'il contient
+
+| Domaine | Types de documents (DocType) |
+| --- | --- |
+| Tiers | `Customer`, `Supplier`, `Contact`, `Address` |
+| Articles et tarifs | `Item`, `Item Group`, `Price List`, `Item Price`, `UOM` |
+| Ventes | `Quotation`, `Sales Order`, `Delivery Note`, `Sales Invoice`, `Dunning` (relances) |
+| Achats | `Purchase Order`, `Purchase Receipt`, `Purchase Invoice` |
+| Factures électroniques reçues | `Supplier Invoice` (créée par eTransactions), `eInvoice`, `eInvoice Event` |
+| Banque et paiements | `Bank Account`, `Bank Transaction` (relevés importés), `Payment Entry`, `Mode of Payment` |
+| Comptabilité | `Account`, `Journal Entry`, `GL Entry`, `Fiscal Year`, `Cost Center`, modèles de TVA |
+| Stock | `Warehouse`, niveaux de stock (rapports) |
+
+Ni la caisse (point de vente), ni la paie, ni la synchronisation bancaire ne sont installées :
+les relevés bancaires sont importés dans Dokos par une personne.
+
+## Ce que l'agent peut faire (outils MCP de Dokos AI)
+
+| Outil | Usage | Accord de la personne |
+| --- | --- | --- |
+| `site_current`, `perms_get` | le site et les droits de l'assistant | non (lecture) |
+| `meta_get` | les champs d'un DocType : à consulter avant toute écriture | non (lecture) |
+| `doc_list`, `doc_get`, `doc_count`, `doc_value` | lire des documents (`fields`, `filters`, `order_by`, `limit` jusqu'à 500) | non (lecture) |
+| `run_report` | lancer un rapport (balance âgée, grand livre, stock…) | non (lecture) |
+| `list_skills`, `load_skill` | les guides fournis par Dokos ; la règle d'or l'emporte sur eux | non (lecture) |
+| `doc_create`, `doc_update` | créer ou modifier un **brouillon** | **oui, à chaque fois** |
+| `doc_submit`, `doc_cancel`, `doc_delete` | valider, annuler, supprimer | **refusés** au poste et par Dokos |
+
+L'utilisateur assistant a le rôle « Assistant IA » : lecture, création et modification de
+brouillons des ventes, des achats, des paiements, des écritures et des tiers ; lecture des
+données de référence (comptes, TVA, banques, stock, factures électroniques). Il ne peut ni
+valider, ni annuler, ni amender, ni supprimer, ni envoyer de courriel depuis Dokos, ni lire la
+caisse. Une facture reçue (`Supplier Invoice`) ne se modifie pas : on prépare à partir d'elle la
+facture d'achat en brouillon.
+
+## Comment l'interroger
+
+- Pour lire : `doc_list` avec des `filters` précis et la liste des `fields` utiles, plutôt que de
+  tout charger ; `doc_count` pour compter ; `run_report` pour les états comptables.
+- Pour citer : le lien `{{ context_dokos_link }}/app/<doctype>/<name>` (DocType en minuscules, espaces
+  remplacés par des tirets), par exemple `{{ context_dokos_link }}/app/sales-invoice/<name>`.
+- Un brouillon garde un nom provisoire jusqu'à sa validation : citez-le après validation si
+  possible.
+- Les montants de Dokos font foi ; une note qui en parle renvoie au document.

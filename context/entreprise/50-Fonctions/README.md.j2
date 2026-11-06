@@ -1,0 +1,20 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+# 50 — Fonctions
+
+Les huit fonctions d'une petite entreprise. Chaque dossier décrit une fonction : sa mission, qui
+s'en occupe, ses routines, ses procédures, les données de Dokos qui la concernent et les projets
+en cours. Dans une très petite entreprise, une même personne tient souvent plusieurs fonctions.
+
+| Fonction | Dossier |
+| --- | --- |
+{% for f in context_functions %}
+| {{ f.label }} | [`{{ f.id }}/`]({{ f.id }}/README.md) |
+{% endfor %}
+
+- La fiche `README.md` de chaque fonction suit le modèle
+  [`90-Modeles/fonction.md`](../90-Modeles/fonction.md). Les parties « à compléter » se
+  remplissent avec les personnes concernées, au fil du travail réel : l'agent ne les invente pas.
+- Les procédures qui reviennent (« comment on traite une facture fournisseur ») deviennent des
+  skills de l'entreprise, dans `.agents/skills/`, et la fiche de la fonction y renvoie.
+- Ce qui touche aux personnes (contrats, salaires, évaluations) n'est jamais ici : c'est dans
+  `direction/`.

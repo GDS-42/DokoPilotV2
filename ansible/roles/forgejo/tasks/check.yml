@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Read-only checks of Forgejo (check.yml, tag `forgejo`), usable in production: Forgejo
+# answers, the C-2 settings (registration closed, sign-in required, offline, no mail, no
+# OAuth, no update checker), the organisation, the repositories and their content, the
+# teams and the collaborators, the credential files and their tokens, and the rights of
+# each account (it reads its repositories and none of the others: an assistant who is not
+# the dirigeant's does not read direction). Nothing is changed.
+
+- name: Describe the accounts and repositories to check
+  ansible.builtin.include_tasks: model.yml
+
+- name: Run the Forgejo checks
+  ansible.builtin.include_tasks: step.yml
+  vars:
+    forgejo_step: check
+    forgejo_step_payload: "{{ forgejo_model }}"
+
+- name: Summary of the Forgejo checks
+  vars:
+    _result: "{{ forgejo_step_result }}"
+  ansible.builtin.debug:
+    msg:
+      - "Forgejo {{ (_result.summary | default({})).version | default('?') }} sur 127.0.0.1:{{ dokopilot_forgejo_http_port }}"
+      - "Dépôts : {{ (_result.summary | default({})).repos | default([]) | join(', ') }}"
+      - "Comptes : {{ (_result.summary | default({})).accounts | default([]) | join(', ') }}"
+      - >-
+        Résultat : {{ 'tout est conforme' if _result.ok | default(false)
+                      else (_result.problems | default([]) | length) ~ ' problème(s) : ' ~ (_result.problems | default([]) | join(' ; ')) }}
+
+- name: Fail when a Forgejo check did not pass
+  ansible.builtin.fail:
+    msg: "Contrôles Forgejo en échec : {{ forgejo_step_result.problems | default(['pas de résultat']) | join(' ; ') }}"
+  when: not forgejo_step_result.ok | default(false)

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Renders the files of one repository into _context_files[<repo>][<path>] (base64), on the
+# workstation that runs Ansible. Input: context_target = {repo, sources (folders, the first
+# one that has a file wins), person (the person of a perso-<id> repository, or {})}.
+# Templates see `person` and the context_* facts of tasks/main.yml.
+
+- name: "Render the context of {{ context_target.repo }}"
+  vars:
+    person: "{{ context_target.person }}"
+  ansible.builtin.set_fact:
+    _context_files: >-
+      {{ _context_files | combine({context_target.repo: {
+           (item.path | regex_replace('\.j2$', '')):
+             (lookup('ansible.builtin.template', item.src) if item.path is match('.*\.j2$')
+              else lookup('ansible.builtin.file', item.src, rstrip=false)) | b64encode}}, recursive=True) }}
+  loop: >-
+    {{ query('community.general.filetree', *context_target.sources, exclude=context_exclude)
+       | selectattr('state', 'eq', 'file') | list }}
+  loop_control:
+    label: "{{ context_target.repo }}/{{ item.path | regex_replace('\\.j2$', '') }}"

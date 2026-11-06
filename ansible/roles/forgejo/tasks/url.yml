@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Sets the fact dokopilot_forgejo_url (ROOT_URL of Forgejo, clone URLs of the context):
+#   lan        http://<server.address>:3000/   (http://localhost:3000/ when server.local)
+#   tailscale  https://<MagicDNS name>:8443/
+# Included by the forgejo role and by the proxy role (include_role tasks_from: url) when the
+# fact is not defined yet, so that both compute the same address.
+
+- name: Read the MagicDNS name of the server (address of Forgejo)
+  ansible.builtin.command: tailscale status --json
+  register: _forgejo_ts_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: dp.network.mode == 'tailscale'
+
+- name: Choose the address of Forgejo
+  vars:
+    _ts: "{{ _forgejo_ts_status.stdout | default('') | from_json if (_forgejo_ts_status.rc | default(1)) == 0 else {} }}"
+    _ts_name: "{{ (_ts.Self | default({})).DNSName | default('') | regex_replace('\\.$', '') }}"
+    _lan_host: "{{ 'localhost' if dp.server.local | default(false) | bool else dp.server.address }}"
+  ansible.builtin.set_fact:
+    dokopilot_forgejo_url: >-
+      {{ ('http://' ~ _lan_host ~ ':' ~ dokopilot_forgejo_lan_port ~ '/') if dp.network.mode == 'lan' and _lan_host | length > 0
+         else (('https://' if dp.network.tailscale.https else 'http://') ~ _ts_name ~ ':' ~ dokopilot_forgejo_tailscale_port ~ '/')
+         if dp.network.mode == 'tailscale' and _ts_name | length > 0
+         else '' }}
+
+- name: Check the address of Forgejo
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dokopilot_forgejo_url is match('^https?://[A-Za-z0-9.:\[\]-]+/$')
+    fail_msg: >-
+      Adresse de Forgejo introuvable : en mode lan, renseignez server.address (ou
+      server.local: true) ; en mode tailscale, vérifiez que le serveur est connecté
+      (tailscale status) et que MagicDNS est activé dans la console Tailscale.

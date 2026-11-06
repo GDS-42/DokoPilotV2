@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Runs one step of files/forgejo_provision.py on the server (ensure, fill, check).
+# Input:  forgejo_step (name), forgejo_step_payload (dict, merged with the connection
+#         settings and the administrator's password, sent on stdin, never on a command line).
+# Output: forgejo_step_result (the JSON result of the step: never a password nor a token).
+# The `check` step is read-only and also runs in check mode.
+
+- name: "Forgejo: {{ forgejo_step }}"
+  vars:
+    _forgejo_connection:
+      base_url: "http://127.0.0.1:{{ dokopilot_forgejo_http_port }}"
+      compose:
+        dir: "{{ dokopilot_forgejo_dir }}"
+        service: forgejo
+      admin:
+        user: "{{ forgejo_admin_user }}"
+        email: "{{ forgejo_admin_email }}"
+        password: "{{ secrets.forgejo_admin_password }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ forgejo_python }}"
+      - "{{ dokopilot_forgejo_dir }}/provision.py"
+      - "{{ forgejo_step }}"
+    stdin: "{{ _forgejo_connection | combine(forgejo_step_payload) | to_json }}"
+  register: _forgejo_step_raw
+  changed_when: _forgejo_step_raw.rc == 0 and (_forgejo_step_raw.stdout | from_json).changed | default(false) | bool
+  failed_when: false
+  check_mode: "{{ ansible_check_mode and forgejo_step != 'check' }}"
+  no_log: true
+
+- name: "Read the result of {{ forgejo_step }}"
+  ansible.builtin.set_fact:
+    forgejo_step_result: >-
+      {{ _forgejo_step_raw.stdout_lines | default([]) | select('match', '^\{') | last | default('{}') | from_json }}
+
+- name: "Stop when this step failed: {{ forgejo_step }}"
+  ansible.builtin.fail:
+    msg: >-
+      Forgejo, étape « {{ forgejo_step }} » en échec :
+      {{ forgejo_step_result.msg | default('pas de résultat (code ' ~ (_forgejo_step_raw.rc | default('?')) ~ ')') }}.
+      Journal du serveur : docker compose --project-directory {{ dokopilot_forgejo_dir }} logs forgejo
+  when: _forgejo_step_raw.rc | default(0) != 0
