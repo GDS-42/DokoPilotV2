@@ -1396,6 +1396,29 @@ def print_summary(state: State) -> None:
     if a["profile"] == "production":
         print(f"  4. Identifiants de la plateforme agréée et du dépôt de sauvegarde : bin/dokopilot secrets {client} edit.")
     print(f"  Contrôles à tout moment : bin/dokopilot check {client}{' --local -K' if a['where'] == 'local' else ''}")
+    missing = missing_tools(a)
+    if missing:
+        print(f"\nÀ installer sur ce poste (commandes dans {REPO}/docs/poste-entrepreneur.md, « 1. Préparer l'ordinateur ») :")
+        for tool, purpose in missing:
+            print(f"  · {tool} : {purpose}")
+
+
+def missing_tools(a: dict[str, Any]) -> list[tuple[str, str]]:
+    """Programs of the workstation the harness uses and that this computer lacks. The
+    assistant does not install them: the agents come from their publishers' installers."""
+    wanted: list[tuple[str, str, str]] = []
+    if "opencode" in a["harness_enabled"]:
+        wanted.append(("opencode", "opencode", "le harnais par défaut"))
+    if "claude-code" in a["harness_enabled"]:
+        wanted.append(("claude", "Claude Code", "le harnais en option"))
+        if sys.platform.startswith("linux"):
+            wanted += [("bwrap", "bubblewrap", "bac à sable des commandes de Claude Code"),
+                       ("socat", "socat", "bac à sable des commandes de Claude Code")]
+    if a["mail"].get("enabled"):
+        wanted.append(("uvx", "uv (uvx)", "connecteur de messagerie"))
+    if a["calendar"].get("enabled"):
+        wanted.append(("npx", "Node.js (npx)", "connecteur d'agenda"))
+    return [(name, purpose) for command, name, purpose in wanted if not shutil.which(command)]
 
 
 # --------------------------------------------------------------------------- secrets editor

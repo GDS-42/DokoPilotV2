@@ -199,5 +199,18 @@ class FilesAndState(unittest.TestCase):
             self.assertEqual(wizard.edit_secrets_file(clear), 3)
 
 
+class Summary(unittest.TestCase):
+    def test_missing_workstation_programs_are_listed_not_installed(self) -> None:
+        answers = {"harness_enabled": ["opencode", "claude-code"], "mail": {"enabled": True}, "calendar": {"enabled": False}}
+        present = {"opencode", "uvx"}
+        with mock.patch.object(wizard.shutil, "which", lambda name: f"/usr/bin/{name}" if name in present else None), \
+                mock.patch.object(wizard.sys, "platform", "linux"):
+            missing = [name for name, _ in wizard.missing_tools(answers)]
+        self.assertEqual(missing, ["Claude Code", "bubblewrap", "socat"])
+        with mock.patch.object(wizard.shutil, "which", lambda name: None), mock.patch.object(wizard.sys, "platform", "darwin"):
+            missing = [name for name, _ in wizard.missing_tools({**answers, "harness_enabled": ["claude-code"], "mail": {}})]
+        self.assertEqual(missing, ["Claude Code"])
+
+
 if __name__ == "__main__":
     unittest.main()
