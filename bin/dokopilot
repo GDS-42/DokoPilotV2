@@ -10,14 +10,17 @@ duration of one Ansible run, then deleted.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import re
 import secrets as pysecrets
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import unicodedata
+import urllib.parse
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -380,6 +383,10 @@ def ansible_playbook(client: str, playbook: str, args: argparse.Namespace, *, bo
             yaml.safe_dump({"secrets": data["secrets"]}, handle, allow_unicode=True)
         cmd = [tool("ansible-playbook"), "-i", str(inv), "-e", f"@{settings_file}"]
         cmd += ["-e", f"@{secrets_file}", "-e", f"dokopilot_client_dir={clients_dir() / client}"]
+        # Tests only: extra role variables (proxy and CA of a test sandbox, small swap), never
+        # client settings. Client files cannot carry them: unknown top-level keys are refused.
+        if os.environ.get("DOKOPILOT_TEST_EXTRA_VARS"):
+            cmd += ["-e", f"@{Path(os.environ['DOKOPILOT_TEST_EXTRA_VARS']).expanduser()}"]
         if args.check:
             cmd.append("--check")
         if args.ask_become_pass:
@@ -503,8 +510,71 @@ def workspace_dir(client: str, settings: dict[str, Any], dest: str | None) -> Pa
     return Path.home() / "DokoPilot" / str(client_id)
 
 
-def git(repo: Path, *args: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", "-C", str(repo), *args], text=True, capture_output=True, env=env)
+# Every git call of `sync` runs as the harness role's helper runs them: no hook or fsmonitor
+# planted in a clone runs, and the credential helpers are reset to the private store file
+# (no keychain of the workstation receives the token, no helper written by an agent runs).
+GIT_SAFE_OPTIONS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+
+
+def git(repo: Path, *args: str, env: dict[str, str], credentials: Path | None = None) -> subprocess.CompletedProcess[str]:
+    cmd = ["git", *GIT_SAFE_OPTIONS]
+    if credentials is not None:
+        cmd += ["-c", "credential.helper=", "-c", f"credential.helper=store --file {shlex.quote(str(credentials))}"]
+    return subprocess.run([*cmd, "-C", str(repo), *args], text=True, capture_output=True, env=env, stdin=subprocess.DEVNULL)
+
+
+def workspace_git_module() -> Any:
+    """The harness role's helper (ansible/roles/harness/files/workspace_git.py): `sync` checks a
+    clone with the same allowlist of Git settings before it runs git in it."""
+    path = REPO / "ansible" / "roles" / "harness" / "files" / "workspace_git.py"
+    spec = importlib.util.spec_from_file_location("dokopilot_workspace_git", path)
+    if spec is None or spec.loader is None:
+        raise CliError(f"Module introuvable : {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def credential_hosts(credentials: Path) -> set[str]:
+    """host[:port] of the entries of git's store file (git writes the port as %3a)."""
+    hosts = set()
+    try:
+        lines = credentials.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return hosts
+    for line in lines:
+        netloc = urllib.parse.unquote(urllib.parse.urlsplit(line.strip()).netloc.rpartition("@")[2]).lower()
+        if netloc:
+            hosts.add(netloc)
+    return hosts
+
+
+def check_clone(label: str, repo: Path, client: str, credentials: Path) -> None:
+    """Refuses a clone whose Git settings an agent could have changed: unexpected keys (a
+    program to run, another push address), another credential helper, or a remote that is
+    not the Forgejo of the credential file. Nothing is sent before these checks."""
+    module = workspace_git_module()
+    advice = f"Vérifiez {repo}/.git/config, puis relancez « bin/dokopilot harness {client} » (il remet les réglages attendus)."
+    try:
+        module.audit(repo, label)
+        helpers = module.config_values(repo, "credential.helper")
+        urls = module.config_values(repo, "remote.origin.url")
+    except module.Failure as exc:
+        message = str(exc).replace("« bin/dokopilot harness »", f"« bin/dokopilot harness {client} »")
+        raise CliError(f"{message}\nRien n'a été envoyé.") from None
+    if helpers != ["", module.helper(str(credentials))]:
+        raise CliError(f"« {label} » ({repo}) : le réglage credential.helper n'est pas celui de DokoPilot ; rien n'a été envoyé.\n{advice}")
+    if len(urls) != 1:
+        raise CliError(f"« {label} » ({repo}) : la copie n'a pas une seule adresse de serveur (remote origin) ; rien n'a été envoyé.\n{advice}")
+    parts = urllib.parse.urlsplit(urls[0])
+    if parts.scheme in ("http", "https"):
+        if "@" in parts.netloc or parts.netloc.lower() not in credential_hosts(credentials):
+            raise CliError(
+                f"« {label} » ({repo}) : l'adresse du serveur ({parts.scheme}://{parts.netloc.rpartition('@')[2]}) n'est pas "
+                f"celle de Forgejo, ou porte des identifiants ; rien n'a été envoyé.\n{advice}"
+            )
+    elif parts.scheme not in ("", "file") or "::" in urls[0]:
+        raise CliError(f"« {label} » ({repo}) : adresse de serveur inattendue ({urls[0]}) ; rien n'a été envoyé.\n{advice}")
 
 
 def git_lines(repo: Path, *args: str, env: dict[str, str]) -> list[str]:
@@ -543,8 +613,9 @@ def conflict_message(label: str, repo: Path, files: list[str], client: str) -> s
     )
 
 
-def sync_repository(label: str, repo: Path, client: str, env: dict[str, str]) -> str:
+def sync_repository(label: str, repo: Path, client: str, env: dict[str, str], credentials: Path) -> str:
     """git pull --rebase then git push in one clone; returns the summary line, raises at the first problem."""
+    check_clone(label, repo, client, credentials)
     if rebase_in_progress(repo, env) or git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env):
         raise CliError(conflict_message(label, repo, git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env), client))
     modified = git_lines(repo, "status", "--porcelain", "--untracked-files=no", env=env)
@@ -557,7 +628,7 @@ def sync_repository(label: str, repo: Path, client: str, env: dict[str, str]) ->
         )
     untracked = git_lines(repo, "status", "--porcelain", "--untracked-files=all", env=env)
     head_before = (git_lines(repo, "rev-parse", "--verify", "-q", "HEAD", env=env) or [""])[0]
-    pull = git(repo, "pull", "--rebase", env=env)
+    pull = git(repo, "pull", "--rebase", env=env, credentials=credentials)
     if pull.returncode != 0:
         conflicts = git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env)
         if conflicts or rebase_in_progress(repo, env):
@@ -568,7 +639,7 @@ def sync_repository(label: str, repo: Path, client: str, env: dict[str, str]) ->
         )
     received = git_count(repo, f"{head_before}..@{{u}}" if head_before else "@{u}", env)
     to_send = git_count(repo, "@{u}..HEAD", env)
-    push = git(repo, "push", env=env)
+    push = git(repo, "push", env=env, credentials=credentials)
     if push.returncode != 0:
         raise CliError(
             f"« {label} » ({repo}) : l'envoi au serveur a été refusé ; si quelqu'un vient d'envoyer des changements, "
@@ -591,17 +662,20 @@ def cmd_sync(args: argparse.Namespace) -> int:
     if not clones:
         raise CliError(f"Aucune copie Git dans {workspace} : lancez d'abord « bin/dokopilot harness {args.client} » (ou indiquez --dest).")
     name = f"{person.get('first_name', '')} {person.get('last_name') or ''}".strip() or str(person["id"])
-    env = dict(os.environ)
-    # Never ask for a password on the terminal (the token is in the credential helper), and
-    # commits replayed by the rebase are committed by the person who synchronises.
-    env.update(GIT_TERMINAL_PROMPT="0", GIT_COMMITTER_NAME=name, GIT_COMMITTER_EMAIL=str(person.get("email", "")))
+    # No inherited GIT_* variable (a Claude Code session sets the assistant's identity), never
+    # a password prompt (the token is in the credential file), and commits replayed by the
+    # rebase are committed by the person who synchronises.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="", SSH_ASKPASS="", GIT_COMMITTER_NAME=name,
+               GIT_COMMITTER_EMAIL=str(person.get("email", "")))
+    credentials = Path.home() / ".config" / "dokopilot" / args.client / "git-credentials"
     print(f"Synchronisation de {workspace} pour {name} ({person['id']}) :")
     present = {label for label, _ in clones}
     for label, sub in WORKSPACE_REPOSITORIES:
         if label not in present:
             print(f"· {label} : aucune copie sur ce poste ({workspace / sub})")
             continue
-        print(sync_repository(label, workspace / sub, args.client, env), flush=True)
+        print(sync_repository(label, workspace / sub, args.client, env, credentials), flush=True)
     print(f"Synchronisation terminée ({len(clones)} dépôt(s)).")
     return 0
 

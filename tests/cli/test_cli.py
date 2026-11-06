@@ -54,8 +54,8 @@ class CliTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def cli(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-        result = subprocess.run([sys.executable, str(CLI), *args], env=self.env, text=True, capture_output=True)
+    def cli(self, *args: str, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run([sys.executable, str(CLI), *args], env={**self.env, **(env or {})}, text=True, capture_output=True)
         if check and result.returncode != 0:
             self.fail(f"bin/dokopilot {' '.join(args)} failed:\n{result.stdout}\n{result.stderr}")
         return result
@@ -230,6 +230,9 @@ class CliTest(unittest.TestCase):
         self.git(clone, "add", name)
         self.git(clone, "commit", "-q", "-m", message)
 
+    def credentials_file(self) -> Path:
+        return Path(self.tmp.name) / "home" / ".config" / "dokopilot" / "acme" / "git-credentials"
+
     def make_workspace(self) -> tuple[Path, Path, Path]:
         """Bare repositories entreprise and perso-camille, the workspace (its clones) and
         another computer's clone of entreprise. Returns (workspace, bare repositories, other)."""
@@ -247,6 +250,9 @@ class CliTest(unittest.TestCase):
             self.commit(seed, ".gitignore" if content else "memoire-vive.md", content or "# Mémoire vive\n", "Contexte initial")
             self.git(seed, "push", "-q", "origin", "HEAD")
             self.git(root, "clone", "-q", str(bare / f"{repo}.git"), str(clone))
+            # As the harness role configures them: the store helper on the private file only.
+            self.git(clone, "config", "--local", "--add", "credential.helper", "")
+            self.git(clone, "config", "--local", "--add", "credential.helper", f"store --file {self.credentials_file()}")
         other = root / "other"
         self.git(root, "clone", "-q", str(bare / "entreprise.git"), str(other))
         return workspace, bare, other
@@ -302,6 +308,44 @@ class CliTest(unittest.TestCase):
         missing = self.cli("sync", "acme", "--dest", str(Path(self.tmp.name) / "vide"), check=False)
         self.assertEqual(missing.returncode, 2)
         self.assertIn("Aucune copie Git", missing.stderr)
+
+    def test_sync_runs_no_planted_program_and_refuses_changed_git_settings(self) -> None:
+        self.init_client()
+        workspace, bare, _ = self.make_workspace()
+        marker = Path(self.tmp.name) / "hook-ran"
+        hook = workspace / ".git" / "hooks" / "pre-push"
+        hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+        hook.chmod(0o755)
+        self.commit(workspace, "note.md", "Note\n", "Note de l'assistant")
+        result = self.cli("sync", "acme", env={"GIT_AUTHOR_NAME": "Assistant", "GIT_COMMITTER_NAME": "Assistant"})
+        self.assertIn("✓ entreprise : 1 envoyé(s)", result.stdout)
+        self.assertFalse(marker.exists(), "a hook planted in the clone ran during sync")
+        # Settings an agent could write: each one stops sync before anything is sent.
+        for key, value, expected in (
+            ("core.sshCommand", "touch /tmp/x", "réglages Git inattendus : core.sshcommand"),
+            ("remote.origin.pushurl", "/tmp/elsewhere.git", "réglages Git inattendus : remote.origin.pushurl"),
+            ("credential.helper", "!touch /tmp/x", "credential.helper n'est pas celui de DokoPilot"),
+        ):
+            with self.subTest(key=key):
+                self.git(workspace, "config", "--local", "--add", key, value)
+                self.commit(workspace, f"{key}.md", "Note\n", f"Note {key}")
+                refused = self.cli("sync", "acme", check=False)
+                self.assertEqual(refused.returncode, 2)
+                self.assertIn(expected, refused.stderr)
+                self.assertRegex(refused.stderr, "[Rr]ien n'a été envoyé")
+                self.assertNotIn(f"Note {key}", self.git(bare / "entreprise.git", "log", "--format=%s", "main"))
+                self.git(workspace, "config", "--local", "--unset-all", key)
+                if key == "credential.helper":
+                    self.git(workspace, "config", "--local", "--add", "credential.helper", "")
+                    self.git(workspace, "config", "--local", "--add", "credential.helper", f"store --file {self.credentials_file()}")
+        # An HTTP remote must be the Forgejo of the credential file.
+        self.credentials_file().parent.mkdir(parents=True, exist_ok=True)
+        self.credentials_file().write_text("http://camille:jeton@forgejo.example.test%3a3000\n", encoding="utf-8")
+        self.git(workspace, "remote", "set-url", "origin", "http://ailleurs.example.test/acme/entreprise.git")
+        elsewhere = self.cli("sync", "acme", check=False)
+        self.assertEqual(elsewhere.returncode, 2)
+        self.assertIn("n'est pas celle de Forgejo", elsewhere.stderr)
+        self.assertNotIn("jeton", elsewhere.stderr + elsewhere.stdout)
 
 
 if __name__ == "__main__":
