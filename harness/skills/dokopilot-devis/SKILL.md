@@ -1,5 +1,5 @@
 ---
-name: devis
+name: dokopilot-devis
 description: Préparer un devis en brouillon (Quotation) dans Dokos à partir d'une demande client — client, articles, quantités, prix du tarif, conditions — et le présenter à l'entrepreneur, qui le relit, le valide et l'envoie. À utiliser quand l'entrepreneur parle de devis, de proposition commerciale, de chiffrage ou d'une demande de prix.
 ---
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->

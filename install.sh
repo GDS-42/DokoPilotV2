@@ -376,7 +376,7 @@ report_local_mode() {
 	var_gb=$(free_gb /var)
 	var_gb=${var_gb:-0}
 	if [ "$var_gb" -lt "$LOCAL_MIN_DISK_GB" ]; then
-		reasons="$reasons; $var_gb Go libres dans /var, il en faut au moins $LOCAL_MIN_DISK_GB (40 conseillés)"
+		reasons="$reasons; $var_gb Go libres dans /var, il en faut au moins $LOCAL_MIN_DISK_GB, 40 conseillés"
 	fi
 	if [ -n "${server_unreachable:-}" ]; then
 		reasons="$reasons; sites injoignables : $server_unreachable"
@@ -392,6 +392,15 @@ report_local_mode() {
 
 # ------------------------------------------------------------------ 2. packages
 
+# logged COMMAND...: run COMMAND with its output in a log; print the end of it on failure.
+logged() {
+	if "$@" </dev/null >"$tmp/packages.log" 2>&1; then
+		return 0
+	fi
+	tail -n 25 "$tmp/packages.log" | sed 's/^/    /'
+	return 1
+}
+
 install_packages() {
 	title "2. Paquets du système"
 	if [ -z "$missing" ]; then
@@ -399,16 +408,21 @@ install_packages() {
 		return 0
 	fi
 	confirm "  Installer avec sudo : $missing ?" || die "installation annulée : installez ces paquets vous-même, puis relancez."
+	# sudo may ask for the password first, on the terminal; the package manager's own output
+	# goes to a log, shown only when something fails.
+	# Not « sudo -v »: it asks for the password unless every rule of the account is NOPASSWD.
+	sudo true </dev/null || die "sudo refuse : votre compte doit pouvoir utiliser sudo ($(sudo_hint))."
+	say "  Installation en cours…"
 	case $pkg_manager in
 	apt)
-		sudo apt-get update -q </dev/null || die "« apt-get update » a échoué : voir les messages ci-dessus."
+		logged sudo apt-get update || die "« apt-get update » a échoué (fin du journal ci-dessus)."
 		# shellcheck disable=SC2086 # one word per package
-		sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends $missing </dev/null ||
-			die "l'installation des paquets a échoué : voir les messages ci-dessus."
+		logged sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $missing ||
+			die "l'installation des paquets a échoué (fin du journal ci-dessus)."
 		;;
 	dnf)
 		# shellcheck disable=SC2086
-		sudo dnf install -y $missing </dev/null || die "l'installation des paquets a échoué : voir les messages ci-dessus."
+		logged sudo dnf install -y $missing || die "l'installation des paquets a échoué (fin du journal ci-dessus)."
 		;;
 	esac
 	for package in $missing; do

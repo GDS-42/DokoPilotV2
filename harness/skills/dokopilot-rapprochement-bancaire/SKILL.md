@@ -1,5 +1,5 @@
 ---
-name: rapprochement-bancaire
+name: dokopilot-rapprochement-bancaire
 description: Proposer le rapprochement des mouvements bancaires non rapprochés (Bank Transaction) avec les factures clients et fournisseurs, et préparer au plus des paiements en brouillon (Payment Entry), sans rien rapprocher ni valider. À utiliser quand l'entrepreneur parle de banque, de relevé, de rapprochement, de paiements reçus ou de virements à identifier.
 ---
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->

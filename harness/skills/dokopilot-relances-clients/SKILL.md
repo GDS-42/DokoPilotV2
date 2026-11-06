@@ -1,5 +1,5 @@
 ---
-name: relances-clients
+name: dokopilot-relances-clients
 description: Préparer les relances des factures clients échues et impayées (Sales Invoice) — liste par client, niveau de relance proposé, puis brouillons de courriels dans la messagerie, jamais envoyés. À utiliser quand l'entrepreneur parle d'impayés, de retards de paiement, de relances ou de recouvrement.
 ---
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->

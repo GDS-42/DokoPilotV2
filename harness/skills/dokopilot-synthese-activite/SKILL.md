@@ -1,5 +1,5 @@
 ---
-name: synthese-activite
+name: dokopilot-synthese-activite
 description: Rédiger la synthèse d'activité de la semaine (ou d'une autre période) à partir de Dokos — chiffre d'affaires, impayés, trésorerie, factures électroniques reçues à traiter, points d'attention. Lecture seule. À utiliser quand l'entrepreneur demande un point, un bilan, un tableau de bord, « où en est-on » ou une synthèse.
 ---
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->

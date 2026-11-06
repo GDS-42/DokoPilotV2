@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # OpenSSH hardening with a lockout guard: the new settings are applied only when every
-# maintenance account can log in with a key.
+# maintenance account can log in with a key. On a local server (server.local), the play
+# runs without SSH: the guard still checks every maintenance account, that one included, so
+# that remote maintenance keeps working, and nothing here touches the local session.
 
 - name: Find the account used for this connection
   ansible.builtin.command: id -un
@@ -54,6 +56,39 @@
       pourront ouvrir une session SSH (clé uniquement, port {{ dp.server.ssh_port }}) : utilisez
       l'un d'eux pour les prochains passages.
   when: _ssh_login.stdout not in dp.maintenance.users | map(attribute='name') | list
+
+# A machine installed without the SSH server ("everything on this machine", installed from
+# its console) gets it here, so that remote maintenance stays possible, with a key only. The
+# settings are written first, so that the new server starts hardened (Debian's sshd_config
+# reads sshd_config.d/*.conf); sshd -t cannot check them before the package is there, and
+# the tasks below check them as soon as it is.
+- name: Check whether the OpenSSH server is installed
+  ansible.builtin.stat:
+    path: /usr/sbin/sshd
+  register: _ssh_server
+
+- name: Create the folder of the SSH server settings before installing it
+  ansible.builtin.file:
+    path: "{{ ssh_dropin_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not _ssh_server.stat.exists
+
+- name: Write the SSH settings before installing the SSH server
+  ansible.builtin.template:
+    src: sshd_dokopilot.conf.j2
+    dest: "{{ ssh_dropin_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not _ssh_server.stat.exists
+
+- name: Install the OpenSSH server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
 
 - name: Apply the SSH settings
   block:

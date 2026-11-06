@@ -1,5 +1,5 @@
 ---
-name: factures-fournisseurs
+name: dokopilot-factures-fournisseurs
 description: Traiter les factures électroniques reçues des fournisseurs (Supplier Invoice d'eTransactions) — les rapprocher de la commande et de la réception, lister les écarts et préparer la facture d'achat en brouillon, sans jamais la valider. À utiliser quand l'entrepreneur parle de factures reçues, de factures fournisseurs à traiter ou de facturation électronique entrante.
 ---
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
