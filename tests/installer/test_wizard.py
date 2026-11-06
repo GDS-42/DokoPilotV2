@@ -56,6 +56,12 @@ class Validators(unittest.TestCase):
             with self.assertRaises(wizard.Invalid):
                 wizard.check_maintenance_user(bad)
 
+    def test_reserved_person_ids_are_refused(self) -> None:
+        for reserved in ("admin", "explore", "dokopilot-admin", "assistant-lucas"):
+            with self.subTest(reserved=reserved), self.assertRaises(wizard.Invalid):
+                wizard.check_person_id(reserved)
+        self.assertEqual(wizard.check_person_id("camille"), "camille")
+
     def test_names_ids_and_abbreviations(self) -> None:
         self.assertEqual(wizard.slug("Élodie"), "elodie")
         self.assertEqual(wizard.abbreviation("Atelier Démo"), "AD")
@@ -203,6 +209,20 @@ class FilesAndState(unittest.TestCase):
         self.assertEqual(data, {"tailscale_auth_key": "tskey-auth-1", "restic_env": {"AWS_ACCESS_KEY_ID": "id"}, "db_root_password": "x"})
         with mock.patch.object(sys, "stdin", io.StringIO(json.dumps({"db_root_password": "y"}))), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(wizard.edit_secrets_file(clear), 3)
+
+
+class People(unittest.TestCase):
+    def test_the_dirigeant_always_has_an_assistant(self) -> None:
+        person = {"first_name": "Camille", "last_name": "Martin", "email": "camille@exemple.test", "id": "camille"}
+        with contextlib.redirect_stdout(io.StringIO()):
+            got = wizard.ask_person(wizard.Ui({"people": [person]}, "r.yml", False), 0, "dirigeant", set(), False)
+        self.assertTrue(got["assistant"])
+        refused = wizard.Ui({"people": [{**person, "assistant": False}]}, "r.yml", False)
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(wizard.Stop):
+            wizard.ask_person(refused, 0, "dirigeant", set(), False)
+        member = wizard.Ui({"people": [person, {**person, "id": "lucas", "assistant": "non"}]}, "r.yml", False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(wizard.ask_person(member, 1, "membre", {"camille"}, False)["assistant"])
 
 
 class Summary(unittest.TestCase):

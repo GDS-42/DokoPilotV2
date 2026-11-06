@@ -59,7 +59,7 @@ models:
   bureau: claude-sonnet-5-5
   atelier: claude-opus-5-5
   small: claude-haiku-5-5
-  api_key_env: ANTHROPIC_API_KEY  # ou api_key_file: ~/cles/anthropic
+  api_key_file: ~/cles/anthropic  # fichier qui contient la clé (ou api_key_env: NOM_DE_VARIABLE)
 claude_code_auth: abonnement    # avec Claude Code : abonnement | cle-api
 
 # ---------------------------------------------------------------- 4. Entreprise et personnes
@@ -73,7 +73,7 @@ people:
     last_name: Martin
     email: camille.martin@atelier-demo.test
     id: camille                 # défaut : tiré du prénom
-    assistant: oui
+    # Le dirigeant a toujours un assistant : c'est l'identité de son agent.
   - first_name: Lucas
     last_name: Bernard
     email: lucas.bernard@atelier-demo.test

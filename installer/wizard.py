@@ -375,9 +375,19 @@ def check_client_id(text: str) -> str:
     return text
 
 
+# Ids that name an account or a route of Forgejo (as dokopilot_reserved_person_ids in the
+# config role, which checks them again).
+RESERVED_PERSON_IDS = frozenset(
+    "admin api assets attachments avatar avatars captcha commits debug dokopilot-admin error explore forgejo-actions "
+    "ghost gitea-actions issues login metrics milestones new notifications org pulls raw repo repo-avatars search user v2".split()
+)
+
+
 def check_person_id(text: str) -> str:
     if not PERSON_ID.match(text):
         raise Invalid("une minuscule, puis minuscules, chiffres ou tirets (2 à 31 caractères).")
+    if text in RESERVED_PERSON_IDS or text.startswith("assistant-"):
+        raise Invalid(f"« {text} » désigne déjà un compte ou une page de Forgejo : choisissez un autre identifiant (le prénom, par exemple).")
     return text
 
 
@@ -1016,10 +1026,15 @@ def ask_person(ui: Ui, index: int, role: str, taken: set[str], demo: bool) -> di
     suggestion = next((s for s in (slug(first), slug(f"{first}-{last}"), slug(email.split("@")[0])) if s and s not in taken), None)
     person_id = ui.ask(f"{prefix}.id", "Identifiant (comptes et dépôt perso-<id>)", default=suggestion, parse=unique_id)
     if dirigeant:
-        question = f"Un assistant pour {first} (agent qui lit et prépare des brouillons dans Dokos et le contexte, sans jamais rien valider) ?"
+        # The dirigeant's assistant is the identity of the agent of this computer: always there.
+        given = ui.lookup(f"{prefix}.assistant")
+        if given is not MISSING and fold(str(given)) in {"n", "non", "no", "false", "faux", "0"}:
+            raise Stop(f"{ui.source} : le dirigeant a toujours un assistant (people.0.assistant: oui) : c'est l'identité de son agent.", 2)
+        print(f"  {first} a un assistant : l'agent qui lit et prépare des brouillons dans Dokos et le contexte, sans jamais rien valider.")
+        assistant = True
     else:
         question = f"Un assistant pour {first} dans le contexte (Forgejo) ? En version 0.2, seul l'assistant du dirigeant entre dans Dokos"
-    assistant = ui.yes_no(f"{prefix}.assistant", question, True)
+        assistant = ui.yes_no(f"{prefix}.assistant", question, True)
     taken.add(person_id)
     return {"id": person_id, "email": email, "first_name": first, "last_name": last, "role": role, "assistant": assistant}
 

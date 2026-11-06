@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A person id that names the Forgejo administration account, an assistant or a Forgejo route.
+# expect: identifiant réservé (dokopilot-admin, explore, assistant-lucas)
+users:
+  people:
+    - { id: dokopilot-admin, email: dirigeant@example.test, first_name: Alex, role: dirigeant }
+    - { id: explore, email: sam@example.test, first_name: Sam, role: membre }
+    - { id: assistant-lucas, email: lucas@example.test, first_name: Lucas, role: membre }

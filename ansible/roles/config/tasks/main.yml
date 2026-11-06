@@ -110,6 +110,32 @@
       users.people : il faut exactement un dirigeant (role: dirigeant), les autres personnes
       sont des membres (role: membre) ; dirigeants déclarés : {{ _dirigeants | join(', ') or 'aucun' }}.
 
+- name: Check that the dirigeant has an assistant
+  vars:
+    _dirigeant_person: "{{ _dp_people | selectattr('role', 'equalto', 'dirigeant') | first }}"
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _dirigeant_person.assistant | bool
+    fail_msg: >-
+      users.people : le dirigeant ({{ _dirigeant_person.id }}) a toujours un assistant (assistant: true) :
+      c'est l'identité de son agent dans Dokos et dans le contexte, sans laquelle le poste ne
+      peut pas être préparé (bin/dokopilot harness).
+
+- name: Check that no person id is reserved
+  vars:
+    _ids: "{{ _dp_people | map(attribute='id') | list }}"
+    _reserved: "{{ _ids | select('in', dokopilot_reserved_person_ids + [dp.client.id | default('') | string]) | list
+                   + _ids | select('match', '^assistant-') | list }}"
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _reserved | length == 0
+    fail_msg: >-
+      users.people : identifiant réservé ({{ _reserved | join(', ') }}) : il désigne déjà un compte
+      ou une page de Forgejo, ou l'organisation du client. Choisissez un autre id (par exemple le
+      prénom).
+
 - name: Check the addresses of the assistants
   vars:
     _emails: "{{ _dp_people | map(attribute='email') | map('lower') | list }}"

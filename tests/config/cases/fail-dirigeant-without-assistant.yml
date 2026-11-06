@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The dirigeant always has an assistant: it is the identity of the agent of the workstation.
+# expect: le dirigeant (alex) a toujours un assistant
+users:
+  people:
+    - { id: alex, email: dirigeant@example.test, first_name: Alex, role: dirigeant, assistant: false }

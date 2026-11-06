@@ -109,6 +109,40 @@ dokopilot_required_secrets:
 
 # Identifiers of people (accounts and perso-<id> repositories) and e-mail addresses.
 dokopilot_person_id_regex: '^[a-z][a-z0-9-]{1,30}$'
+# Person ids that would collide with an account or a route of Forgejo: its administration
+# account, the assistants' prefix (assistant-<id>) and the reserved user names of Forgejo
+# (models/user/user.go, reservedUsernames). The forgejo role refuses them again before any
+# change, from the list of the running version.
+dokopilot_reserved_person_ids:
+  - admin
+  - api
+  - assets
+  - attachments
+  - avatar
+  - avatars
+  - captcha
+  - commits
+  - debug
+  - dokopilot-admin
+  - error
+  - explore
+  - forgejo-actions
+  - ghost
+  - gitea-actions
+  - issues
+  - login
+  - metrics
+  - milestones
+  - new
+  - notifications
+  - org
+  - pulls
+  - raw
+  - repo
+  - repo-avatars
+  - search
+  - user
+  - v2
 dokopilot_email_regex: '^[^@\s]+@[^@\s]+$'
 
 # Model settings: an opencode provider id, and models written "<provider>/<model>".
