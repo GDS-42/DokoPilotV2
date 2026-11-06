@@ -108,12 +108,14 @@ dokopilot_required_secrets:
   - restic_password
 
 # Identifiers of people (accounts and perso-<id> repositories) and e-mail addresses.
-dokopilot_person_id_regex: '^[a-z][a-z0-9-]{1,30}$'
+# Forgejo account names: no dash at either end, never two in a row.
+dokopilot_person_id_regex: '^(?=.{2,31}$)[a-z][a-z0-9]*(-[a-z0-9]+)*$'
 # Person ids that would collide with an account or a route of Forgejo: its administration
 # account, the assistants' prefix (assistant-<id>) and the reserved user names of Forgejo
 # (models/user/user.go, reservedUsernames). The forgejo role refuses them again before any
 # change, from the list of the running version.
 dokopilot_reserved_person_ids:
+  - actor
   - admin
   - api
   - assets

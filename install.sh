@@ -174,7 +174,7 @@ check_system() {
 	case $os_id in
 	debian)
 		case $os_version in
-		12 | 13) pkg_manager=apt ;;
+		13) pkg_manager=apt ;;
 		esac
 		;;
 	ubuntu)
@@ -187,7 +187,7 @@ check_system() {
 	if [ -n "$pkg_manager" ]; then
 		ok "Système : ${os_name:-$os_id $os_version}"
 	else
-		blocker "Système non pris en charge : ${os_name:-$os_id $os_version}. Il faut Debian 12 ou 13, Ubuntu 24.04 ou plus récent, ou Fedora 41 ou plus récent."
+		blocker "Système non pris en charge : ${os_name:-$os_id $os_version}. Il faut Debian 13, Ubuntu 24.04 ou plus récent, ou Fedora 41 ou plus récent (Debian 12 fournit Python 3.11, trop ancien pour Ansible 2.21)."
 	fi
 	case $arch in
 	x86_64 | aarch64) ok "Architecture : $arch" ;;
@@ -357,6 +357,15 @@ check_network() {
 	else
 		ok "Réseau : $sites"
 	fi
+	# The version itself: a missing tag or a private repository fails here, not after the
+	# packages are installed (git may be missing at this point: the clone then tells).
+	if command -v git >/dev/null 2>&1; then
+		if GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code "$repo_url" "refs/tags/$version" "refs/heads/$version" >/dev/null 2>&1 </dev/null; then
+			ok "Version $version : disponible"
+		else
+			blocker "Version $version introuvable sur $repo_url : l'étiquette n'existe pas, ou le dépôt n'est pas public."
+		fi
+	fi
 	# shellcheck disable=SC2086
 	server_unreachable=$(unreachable $SERVER_SITES)
 	server_unreachable=${server_unreachable% }
@@ -437,8 +446,8 @@ fetch_repository() {
 	title "3. DokoPilot $version"
 	if [ -d "$dir/.git" ]; then
 		origin=$(git -C "$dir" remote get-url origin 2>/dev/null || true)
-		case $origin in
-		"$repo_url" | *DokoPilotV2*) ;;
+		case $(printf '%s' "$origin" | tr '[:upper:]' '[:lower:]') in
+		"$(printf '%s' "$repo_url" | tr '[:upper:]' '[:lower:]')" | *dokopilotv2*) ;;
 		*) die "« $dir » est une copie d'un autre dépôt (${origin:-sans origine}) : choisissez un autre dossier avec --dir." ;;
 		esac
 		say "  Copie existante dans $dir : passage à la version $version."
@@ -451,7 +460,7 @@ fetch_repository() {
 	else
 		say "  Récupération de $repo_url dans $dir"
 		git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$version" "$repo_url" "$dir" </dev/null ||
-			die "récupération impossible. La version $version existe-t-elle ? Si le dépôt est privé, connectez-vous d'abord à GitHub (par exemple « gh auth login »), puis relancez."
+			die "récupération impossible depuis $repo_url : la version $version existe-t-elle, et le dépôt est-il public ? (Accès à Internet ou proxy : variable https_proxy.)"
 	fi
 	ok "DokoPilot $version ($(git -C "$dir" rev-parse --short HEAD)) dans $dir"
 }

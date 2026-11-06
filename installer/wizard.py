@@ -58,8 +58,9 @@ STATE_FORMAT = 1
 CONFIG_ROOT = Path.home() / ".config" / "dokopilot"
 
 # Same rules as the config role (ansible/roles/config).
-CLIENT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}$")
-PERSON_ID = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
+# Forgejo account and organisation names: no dash at either end, never two in a row.
+CLIENT_ID = re.compile(r"^(?=.{2,31}$)[a-z0-9]+(-[a-z0-9]+)*$")
+PERSON_ID = re.compile(r"^(?=.{2,31}$)[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s.]+$")
 UNIX_USER = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 NOT_NOMINATIVE = {"root", "admin", "debian", "ubuntu", "frappe"}
@@ -369,7 +370,7 @@ class Ui:
 
 def check_client_id(text: str) -> str:
     if not CLIENT_ID.match(text):
-        raise Invalid("minuscules, chiffres et tirets, de 2 à 31 caractères, sans tiret au début (ex. atelier-martin).")
+        raise Invalid("minuscules, chiffres et tirets simples, de 2 à 31 caractères, sans tiret au début ni à la fin (ex. atelier-martin).")
     if text == "demo" or tracked(clients_dir() / text / "client.yml"):
         raise Invalid(f"« {text} » est l'exemple versionné du dépôt (clients/{text}/client.yml) : choisissez un autre identifiant, par exemple atelier-demo.")
     return text
@@ -378,14 +379,14 @@ def check_client_id(text: str) -> str:
 # Ids that name an account or a route of Forgejo (as dokopilot_reserved_person_ids in the
 # config role, which checks them again).
 RESERVED_PERSON_IDS = frozenset(
-    "admin api assets attachments avatar avatars captcha commits debug dokopilot-admin error explore forgejo-actions "
+    "actor admin api assets attachments avatar avatars captcha commits debug dokopilot-admin error explore forgejo-actions "
     "ghost gitea-actions issues login metrics milestones new notifications org pulls raw repo repo-avatars search user v2".split()
 )
 
 
 def check_person_id(text: str) -> str:
     if not PERSON_ID.match(text):
-        raise Invalid("une minuscule, puis minuscules, chiffres ou tirets (2 à 31 caractères).")
+        raise Invalid("une minuscule, puis minuscules, chiffres ou tirets simples (2 à 31 caractères, sans tiret à la fin).")
     if text in RESERVED_PERSON_IDS or text.startswith("assistant-"):
         raise Invalid(f"« {text} » désigne déjà un compte ou une page de Forgejo : choisissez un autre identifiant (le prénom, par exemple).")
     return text
@@ -842,6 +843,16 @@ def step_where(ui: Ui, state: State) -> None:
             "et sudo vous le demandera (invite « BECOME password » d'Ansible)."
         )
         keys, with_options = authorized_keys(Path(me.pw_dir) / ".ssh" / "authorized_keys")
+        if with_options:
+            # The maintenance role rewrites authorized_keys with bare keys: a key limited by
+            # from=, command= or restrict would become a full login of a sudo account.
+            raise Stop(
+                f"{with_options} ligne(s) de ~/.ssh/authorized_keys ont des options (from=…, command=…, restrict…). "
+                "DokoPilot réécrit ce fichier avec les seules clés, sans options : une clé limitée (sauvegarde, commande "
+                "forcée) ouvrirait alors une session complète d'un compte qui a sudo. Retirez ces lignes, ou leurs options "
+                "si ces clés doivent ouvrir une session complète, puis relancez l'assistant.",
+                2,
+            )
         a.pop("ssh_public_key_files", None)
         a.pop("ssh_public_keys", None)
         if keys:
@@ -849,8 +860,6 @@ def step_where(ui: Ui, state: State) -> None:
                 f"  Les {len(keys)} clé(s) SSH déjà autorisées pour « {me.pw_name} » (~/.ssh/authorized_keys) le restent : "
                 "ce seront les seules à ouvrir une session SSH à distance."
             )
-            if with_options:
-                print(f"  ! {with_options} de ces lignes avaient des options (from=…, command=…) : elles sont reprises sans ces options.")
             a["ssh_public_keys"] = keys
         else:
             key = ui.ask(
@@ -1104,7 +1113,7 @@ def step_network(ui: Ui, state: State) -> None:
             state.pending["restic_env"] = {"AWS_ACCESS_KEY_ID": key_id, "AWS_SECRET_ACCESS_KEY": secret}
             a["backup_s3_pending"] = True
         else:
-            print(f"  Identifiants du dépôt : ajoutez-les ensuite avec « bin/dokopilot secrets {client} edit » (clé restic_env).")
+            print(f"  Identifiants du dépôt : ajoutez-les ensuite avec « {cli()} secrets {client} edit » (clé restic_env).")
 
     mail: dict[str, Any] = {"enabled": False}
     if ui.yes_no("mail.enabled", "Brancher une messagerie (lecture et brouillons seulement, jamais d'envoi) ?", False):
@@ -1363,7 +1372,22 @@ def installation(ui: Ui, state: State, stop_after: str) -> None:
         if stop_after == action:
             print(f"\nÉtape « {ACTIONS[action]} » faite pour « {client} ». Relancez l'assistant pour continuer.")
             return
+    if a["where"] == "local":
+        forget_sudo()
     print_summary(state)
+
+
+def forget_sudo() -> None:
+    """On this machine, the agent runs under the maintenance account: sudo must not remember
+    the password typed for Ansible when the person launches the agent right after."""
+    if shutil.which("sudo"):
+        subprocess.run(["sudo", "-K"], stdin=subprocess.DEVNULL, check=False)
+    print("  sudo a oublié votre mot de passe (sudo -K) : l'agent que vous lancerez ensuite ne pourra pas s'en servir.")
+
+
+# Interfaces whose addresses are not reachable from the local network: Docker and libvirt
+# bridges, container ends, Tailscale (shown with its own name).
+VIRTUAL_INTERFACES = ("docker", "br-", "veth", "virbr", "tailscale", "lo")
 
 
 def lan_addresses() -> list[str]:
@@ -1371,7 +1395,22 @@ def lan_addresses() -> list[str]:
         output = subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"], capture_output=True, text=True, check=False).stdout
     except OSError:
         return []
-    return re.findall(r"inet (\d+\.\d+\.\d+\.\d+)/", output)
+    found = []
+    for line in output.splitlines():
+        fields = line.split()
+        match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/", line)
+        if match and len(fields) > 1 and not fields[1].startswith(VIRTUAL_INTERFACES):
+            found.append(match.group(1))
+    return found
+
+
+def cli() -> str:
+    """bin/dokopilot as the person can type it from any folder (~/DokoPilotV2/bin/dokopilot)."""
+    path = REPO / "bin" / "dokopilot"
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
 
 
 def print_summary(state: State) -> None:
@@ -1393,7 +1432,7 @@ def print_summary(state: State) -> None:
     print(f"\nInstallation terminée pour « {a['company_name']} » ({client}).\n")
     print(f"  Dokos      {dokos}")
     print(f"  Forgejo    {forgejo}")
-    print(f"  Dirigeant  {dirigeant['email']} — mot de passe initial de Dokos : bin/dokopilot secrets {client} show entrepreneur_password")
+    print(f"  Dirigeant  {dirigeant['email']} — mot de passe initial de Dokos : {cli()} secrets {client} show entrepreneur_password")
     print(f"             Forgejo : compte « {dirigeant['id']} », mot de passe initial dans {config_dir}/forgejo-password (à changer)")
     if dirigeant["assistant"]:
         assistant = f"assistant.{dirigeant['id']}@{domain}"
@@ -1409,10 +1448,10 @@ def print_summary(state: State) -> None:
     agent = "opencode" if a["harness_default"] == "opencode" else "claude"
     login = " (Claude Code : /login au premier lancement)" if "claude-code" in a["harness_enabled"] and a["claude_code_auth"] == "subscription" else ""
     print(f"  2. Lancez l'agent : cd ~/DokoPilot/{client} && {agent}{login}")
-    print(f"  3. Relisez et poussez le travail de l'agent : bin/dokopilot sync {client} (vous poussez, jamais l'agent).")
+    print(f"  3. Relisez et poussez le travail de l'agent : {cli()} sync {client} (vous poussez, jamais l'agent).")
     if a["profile"] == "production":
-        print(f"  4. Identifiants de la plateforme agréée et du dépôt de sauvegarde : bin/dokopilot secrets {client} edit.")
-    print(f"  Contrôles à tout moment : bin/dokopilot check {client}{' --local -K' if a['where'] == 'local' else ''}")
+        print(f"  4. Identifiants de la plateforme agréée et du dépôt de sauvegarde : {cli()} secrets {client} edit.")
+    print(f"  Contrôles à tout moment : {cli()} check {client}{' --local -K' if a['where'] == 'local' else ''}")
     missing = missing_tools(a)
     if missing:
         print(f"\nÀ installer sur ce poste (commandes dans {REPO}/docs/poste-entrepreneur.md, « 1. Préparer l'ordinateur ») :")

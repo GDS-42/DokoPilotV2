@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Forgejo refuses an account name that ends with a dash or holds two dashes in a row.
+# expect: lucas-
+users:
+  people:
+    - { id: alex, email: dirigeant@example.test, first_name: Alex, role: dirigeant }
+    - { id: lucas-, email: lucas@example.test, first_name: Lucas, role: membre }

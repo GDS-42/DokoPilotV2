@@ -60,7 +60,7 @@
       - item.assistant_email | default('') | string == '' or item.assistant_email | string is match(dokopilot_email_regex)
     fail_msg: >-
       Personne « {{ item.id | default('?') }} » invalide : id en minuscules (une lettre puis
-      lettres, chiffres ou tirets, 2 à 31 caractères), email valide, first_name renseigné,
+      lettres, chiffres ou tirets simples, 2 à 31 caractères, sans tiret à la fin), email valide, first_name renseigné,
       role dirigeant ou membre, assistant true ou false, assistant_email vide ou valide.
   loop: "{{ dp.users.people }}"
   loop_control:
@@ -234,7 +234,7 @@
     quiet: true
     that:
       - dp.profile in ['demo', 'production']
-      - dp.client.id is match('^[a-z0-9][a-z0-9-]{1,30}$')
+      - dp.client.id is match('^(?=.{2,31}$)[a-z0-9]+(-[a-z0-9]+)*$')
       - dp.client.company_name | length > 0
       - dp.client.company_abbr is match('^[A-Za-z0-9]{2,5}$')
       - dp.client.country == 'France'
@@ -310,16 +310,23 @@
   when: dp.profile == 'production'
 
 - name: Check that the required secrets are present
+  vars:
+    _required: >-
+      {{ dokopilot_required_secrets
+         + (['maintenance_sudo_password'] if dp.maintenance.sudo_requires_password else [])
+         + (['forgejo_admin_password'] if dp.context.enabled | default(false) | bool else []) }}
+    _missing: >-
+      {{ _required | reject('in', (secrets if secrets is mapping else {}) | dict2items
+                                  | rejectattr('value', 'in', ['', 'generate', none]) | map(attribute='key') | list) | list }}
   ansible.builtin.assert:
     quiet: true
     that:
       - secrets is defined
       - secrets is mapping
-      - (dokopilot_required_secrets + (['maintenance_sudo_password'] if dp.maintenance.sudo_requires_password else []))
-        | reject('in', secrets | default({}) | dict2items | rejectattr('value', 'in', ['', 'generate', none]) | map(attribute='key') | list)
-        | list | length == 0
+      - _missing | length == 0
     fail_msg: >-
-      Secrets manquants : lancez les commandes avec bin/dokopilot, qui déchiffre
-      clients/<client>/secrets.yml.age, et vérifiez qu'aucune valeur obligatoire n'est
-      vide ou « generate ».
+      Secrets manquants ({{ _missing | join(', ') }}) : lancez les commandes avec bin/dokopilot,
+      qui déchiffre clients/<client>/secrets.yml.age ; « bin/dokopilot init <client> » complète
+      les secrets d'un client créé avec une version précédente. Aucune valeur obligatoire ne doit
+      être vide ou « generate ».
   no_log: true
