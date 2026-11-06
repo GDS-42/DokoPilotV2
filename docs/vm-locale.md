@@ -37,6 +37,8 @@ Le script (lancé avec sudo, car les disques vont dans `/var/lib/libvirt/images/
 
 ### B. VirtualBox, VMware, UTM, Hyper-V ou Proxmox (image cloud et cloud-init)
 
+Sous Windows avec Hyper-V, suivez plutôt le pas à pas dédié : [vm-hyperv.md](vm-hyperv.md) (installation classique de Debian, poste de l'intégrateur dans WSL, Claude Code).
+
 1. Téléchargez `debian-13-generic-amd64.qcow2` depuis `https://cloud.debian.org/images/cloud/trixie/latest/` et vérifiez-le avec `SHA512SUMS`.
 2. Convertissez-la si votre hyperviseur l'exige : `qemu-img convert -O vdi …` (VirtualBox), `-O vmdk` (VMware), `-O vhdx` (Hyper-V) ; agrandissez le disque à 40 Go.
 3. Créez l'image d'amorçage : `vm/make-seed.sh --user "$USER" --out seed.iso`.

@@ -42,6 +42,7 @@ Claude Code peut piloter ces étapes depuis le poste de l'intégrateur : il lit 
 | [Architecture](docs/architecture.md) | Les briques, les flux, ce qui tourne où |
 | [Décisions](docs/decisions.md) | Les choix tranchés et leurs raisons |
 | [VM locale](docs/vm-locale.md) | Créer la VM de test et y installer la démo |
+| [VM Hyper-V](docs/vm-hyperv.md) | Le même essai pas à pas sous Windows : Hyper-V, WSL et Claude Code |
 | [Installation](docs/installation.md) | Mise en production chez un client |
 | [Sécurité](docs/securite.md) | Exposition, accès de maintenance, droits des assistants, secrets |
 | [Exploitation](docs/exploitation.md) | Sauvegardes, restauration, mises à jour, supervision |
