@@ -50,6 +50,9 @@ test-stack: ## Pile Dokos, provisionnement et données de test dans Docker (Dock
 vm: ## Créer la VM locale de démonstration (libvirt/QEMU, Linux) — voir docs/vm-locale.md
 	vm/create-libvirt-vm.sh
 
+.PHONY: ci
+ci: lint test test-system ## Vérifications complètes avant une pull request, sur ce poste (pas de CI GitHub)
+
 .PHONY: install
 install: ## Installer le client CLIENT (défaut : demo)
 	bin/dokopilot install $(CLIENT)

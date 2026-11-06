@@ -44,7 +44,9 @@ Read [`docs/architecture.md`](docs/architecture.md) and [`docs/decisions.md`](do
 | `make test-system` | System roles against a Debian 13 systemd container (Docker); `DP_TEST_SITE=1` adds the full installation (site.yml, check, harness, backup) |
 | `make test-stack` | Dokos stack, provisioning, demo data and permission tests (Docker, about 8 GB RAM) |
 
-Run `make lint test` before every pull request, plus `make test-system` or `make test-stack` when you touch those parts. Never weaken a test, a check or an assertion to make it pass.
+Run `make lint test` before every pull request, plus `make test-system` or `make test-stack` when you touch those parts (`make ci` runs lint, fast tests and system tests). Never weaken a test, a check or an assertion to make it pass.
+
+There is **no GitHub Actions workflow**: the repository is private and must not use any paid GitHub feature (Actions minutes, Codespaces, Packages, LFS…). Every check runs locally, and the pull request states the commands run and their results.
 
 ## Conventions
 

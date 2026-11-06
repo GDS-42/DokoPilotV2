@@ -104,3 +104,9 @@ La règle « logiciels libres uniquement » s'applique à ce dépôt et à ce qu
 - **Service de coordination de Tailscale** (service en ligne propriétaire ; le client et le démon sont sous licence BSD-3) : il ne voit que des métadonnées de connexion, jamais le trafic, chiffré de bout en bout par WireGuard. Alternative libre : Headscale (BSD-3), serveur de coordination auto-hébergé, compatible avec le client Tailscale ; à prévoir si un client refuse ce service.
 - **Revoir si** : un client exige une chaîne entièrement libre (Headscale et opencode seuls).
 
+## D-17 — Pas de fonctionnalité payante de GitHub
+
+- **Contexte** : le dépôt est privé ; GitHub Actions y consomme des minutes facturées au-delà du quota gratuit, et la première exécution a été refusée pour une raison de facturation du compte.
+- **Choix** : aucun flux GitHub Actions, ni aucune autre fonctionnalité payante (Codespaces, Packages, LFS). Les vérifications tournent sur le poste ou dans la session de travail : `make ci` (lint, tests rapides, rôles système), plus `make test-e2e` et `make test-stack` quand l'installation ou la pile Dokos changent ; chaque pull request indique les commandes lancées et leurs résultats.
+- **Revoir si** : le dépôt devient public (Actions y est gratuit) ou le porteur du projet choisit un service d'intégration continue.
+
