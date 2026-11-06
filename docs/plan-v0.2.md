@@ -35,7 +35,7 @@ users:
 Le rôle `config` **dérive** les anciennes clés, que les rôles de la version 0.1 continuent de lire :
 
 - `dp.users.entrepreneur` = `{email, first_name, last_name}` du dirigeant ;
-- `dp.users.assistants` = `[{for: <email de la personne>, email: <assistant_email>}]` pour chaque personne qui a `assistant: true` ;
+- `dp.users.assistants` = `[{for: <email du dirigeant>, email: <assistant_email>}]` si le dirigeant a `assistant: true` : en version 0.2, seul l'assistant du dirigeant a un utilisateur dans Dokos (D-29) ; ceux des membres n'existent que dans Forgejo ;
 - `dp.users.dirigeant` = l'entrée complète du dirigeant ; `dp.users.people` = la liste complète, avec `assistant_email` rempli.
 
 Un fichier qui contient encore `users.entrepreneur` (ancien format) est refusé avec un message qui montre la nouvelle forme.
