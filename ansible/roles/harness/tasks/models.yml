@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Key of the model provider (decision D-24): it stays on this computer, in
+# ~/.config/dokopilot/<client>/model-api-key (0600), written by the installer or typed here
+# once. opencode reads it with {file:...}; Claude Code (models.claude_code_auth: api_key)
+# with its apiKeyHelper, outside the Bash sandbox. It never goes into the client's secrets,
+# the workspace or the agent's environment.
+
+- name: Work out the model provider
+  ansible.builtin.set_fact:
+    _harness_model_provider: >-
+      {{ dp.models.provider or ([dp.models.bureau, dp.models.atelier, dp.models.small] | select | first | default('')).split('/') | first }}
+
+- name: Decide whether a key is needed
+  ansible.builtin.set_fact:
+    _harness_model_key_opencode: >-
+      {{ 'opencode' in dp.harness.enabled and _harness_model_provider | length > 0
+         and _harness_model_provider not in harness_model_keyless_providers }}
+    _harness_model_key_claude: "{{ 'claude-code' in dp.harness.enabled and dp.models.claude_code_auth == 'api_key' }}"
+
+- name: Prepare the key file
+  when: _harness_model_key_opencode | bool or _harness_model_key_claude | bool
+  block:
+    - name: Check whether the key of the model provider is already on this computer
+      ansible.builtin.stat:
+        path: "{{ harness_model_key_file }}"
+      register: _harness_model_key_stat
+
+    - name: Ask the person for the key of the model provider
+      ansible.builtin.pause:
+        prompt: >-
+          Clé d'API du fournisseur de modèle {{ _harness_model_provider or 'anthropic' }} (la saisie reste masquée ;
+          elle est rangée dans {{ harness_model_key_file }}, jamais dans le dossier de travail)
+        echo: false
+      register: _harness_model_key_prompt
+      no_log: true
+      when:
+        - not _harness_model_key_stat.stat.exists
+        - harness_model_api_key is not defined
+
+    - name: Store the key of the model provider on this computer
+      ansible.builtin.copy:
+        content: "{{ (harness_model_api_key if harness_model_api_key is defined else _harness_model_key_prompt.user_input) | trim }}"
+        dest: "{{ harness_model_key_file }}"
+        mode: "0600"
+      no_log: true
+      when: not _harness_model_key_stat.stat.exists
+
+    - name: Keep the key file private
+      ansible.builtin.file:
+        path: "{{ harness_model_key_file }}"
+        mode: "0600"
+
+    - name: Check whether the stored key is empty
+      ansible.builtin.set_fact:
+        _harness_model_key_ok: "{{ lookup('ansible.builtin.file', harness_model_key_file) | trim | length > 0 }}"
+      no_log: true
+
+    - name: Refuse an empty key
+      ansible.builtin.fail:
+        msg: >-
+          La clé du fournisseur de modèle enregistrée est vide : supprimez {{ harness_model_key_file }},
+          puis relancez « bin/dokopilot harness {{ dp.client.id }} ».
+      when: not _harness_model_key_ok | bool

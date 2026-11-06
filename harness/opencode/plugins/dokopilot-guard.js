@@ -12,6 +12,12 @@
 // question from a plugin, so after a mail read it blocks the shell and file changes for
 // the rest of the session; everything else keeps its static rules (see opencode.json).
 //
+// Both versions also give the agent's shell the Git identity of the person's assistant
+// (decision D-22: the agent commits as « Assistant de <Prénom> »): V2 through the shell
+// hook "create.before" (packages/plugin/src/promise/shell.ts, @opencode/plugin 2.2.5: the
+// event's env is the environment of the spawned shell), V1 through "shell.env"
+// (@opencode-ai/plugin 1.19.5). This is traceability, not a security boundary.
+//
 // The policy (tool names, safe reads) is generated next to this file by
 // bin/dokopilot harness. Without a readable policy every session counts as exposed.
 // Messages shown to the entrepreneur are in French.
@@ -37,12 +43,18 @@ function loadPolicy() {
     if (typeof policy.mail_prefix !== "string" || policy.mail_prefix === "") return null
     if (typeof policy.mail_server !== "string" || policy.mail_server === "") return null
     if (!lists.every((key) => Array.isArray(policy[key]) && policy[key].every((v) => typeof v === "string"))) return null
+    const identity = policy.git_identity
+    const validIdentity =
+      identity !== null &&
+      typeof identity === "object" &&
+      ["name", "email"].every((key) => typeof identity[key] === "string" && identity[key] !== "")
     return {
       mailPrefix: policy.mail_prefix,
       mailServer: policy.mail_server,
       safe: new Set(policy.safe_actions),
       alwaysAsk: new Set(policy.always_ask),
       v1Blocked: new Set(policy.v1_blocked_when_exposed),
+      gitIdentity: validIdentity ? { name: identity.name, email: identity.email } : null,
     }
   } catch {
     return null
@@ -57,6 +69,16 @@ const mailServer = policy ? policy.mailServer : "mail"
 const safeActions = policy ? policy.safe : new Set(["read", "glob", "grep", "question"])
 const alwaysAsk = policy ? policy.alwaysAsk : new Set()
 const v1Blocked = policy ? policy.v1Blocked : new Set(["bash", "edit", "write", "patch", "apply_patch", "multiedit"])
+const gitIdentity = policy ? policy.gitIdentity : null
+
+// Author and committer of the commits made by the agent's shell.
+function addGitIdentity(env) {
+  if (gitIdentity === null || env === null || typeof env !== "object") return
+  env.GIT_AUTHOR_NAME = gitIdentity.name
+  env.GIT_AUTHOR_EMAIL = gitIdentity.email
+  env.GIT_COMMITTER_NAME = gitIdentity.name
+  env.GIT_COMMITTER_EMAIL = gitIdentity.email
+}
 
 function isMailTool(name) {
   return typeof name === "string" && name.startsWith(mailPrefix)
@@ -115,6 +137,12 @@ export default {
       }
     })
 
+    if (ctx.shell && typeof ctx.shell.hook === "function") {
+      await ctx.shell.hook("create.before", async (event) => {
+        addGitIdentity(event.env)
+      })
+    }
+
     await ctx.permission.hook("evaluate", async (event) => {
       try {
         if (isMailAction(event)) await markExposed(event.sessionID)
@@ -155,6 +183,9 @@ export default {
       },
       "tool.execute.after": async (input) => {
         if (isMailTool(input.tool)) exposed.add(input.sessionID)
+      },
+      "shell.env": async (_input, output) => {
+        addGitIdentity(output.env)
       },
     }
   },

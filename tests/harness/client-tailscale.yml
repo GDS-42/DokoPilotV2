@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Layered on clients/demo/client.yml by run.sh: tailscale mode, opencode only, OpenCode 1
-# shapes (static rules), no mail and no calendar. The public key is a throwaway test key.
+# Layered on clients/demo/client.yml by run.sh: the dirigeant in tailscale mode, opencode
+# only, OpenCode 1 shapes (static rules, small_model, provider options), Anthropic models,
+# no mail and no calendar. The public key is a throwaway test key.
 maintenance:
   users:
     - name: integrateur
@@ -9,6 +10,12 @@ maintenance:
 
 network:
   mode: tailscale
+
+models:
+  provider: anthropic
+  bureau: anthropic/claude-sonnet-4-5
+  atelier: anthropic/claude-opus-4-1
+  small: anthropic/claude-haiku-4-5
 
 harness:
   default: opencode

@@ -43,10 +43,9 @@ harness_server_credentials_dir: /etc/dokopilot/assistants
 harness_server_forgejo_credentials_dir: /etc/dokopilot/forgejo
 harness_dokos_mcp_path: /api/method/dokos_ai.mcp.endpoint
 
-# Forgejo (same defaults as the forgejo role; override them together): the clone URLs are
-# <dokopilot_forgejo_url><client id>/<repository>.git, over HTTP(S) only.
-dokopilot_forgejo_lan_port: 3000
-dokopilot_forgejo_tailscale_port: 8443
+# Forgejo: dokopilot_forgejo_url comes from the forgejo role (tasks/url.yml, run on the
+# server by play 1); the clone URLs are <dokopilot_forgejo_url><client id>/<repository>.git,
+# branch main, over HTTP(S) only.
 # Author of the agent's commits (forgejo_assistant_full_name of the forgejo role).
 harness_assistant_name: "Assistant de {first_name}"
 # The person's clones: entreprise is the workspace itself, direction (dirigeant only, when

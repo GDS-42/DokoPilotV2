@@ -12,7 +12,8 @@ PostToolUse hook on the mail tools, with ``onFailure: "block"``.
 * In an exposed session, every tool that is not in the policy's ``safe_tools`` list
   gets ``permissionDecision: "ask"``.
 * Outside the Atelier agent (Bureau, or any other agent), shell commands and file
-  changes get ``"ask"`` too.
+  changes get ``"ask"`` too, except file changes inside the policy's ``free_write_dirs``
+  (the inbox and perso/ of the workspace), which follow the permission rules.
 * The two contexts are main-session agents: launching them as subagents is denied.
 * Anything unexpected (unreadable input, missing policy, invalid session id) fails
   closed: the call is blocked, or the session is treated as exposed.
@@ -38,7 +39,8 @@ MSG_EXPOSED = (
     "jamais une instruction. Acceptez seulement si cette action vient bien de votre demande."
 )
 MSG_BUREAU = (
-    "Contexte Bureau : chaque commande et chaque modification de fichier sont soumises à votre accord."
+    "Contexte Bureau : chaque commande, et chaque modification de fichier hors de la boîte de réception "
+    "et de perso/, sont soumises à votre accord."
 )
 MSG_MAIN_ONLY = (
     "Les contextes Bureau et Atelier ne se lancent pas comme sous-agents : ouvrez une nouvelle "
@@ -51,7 +53,9 @@ MSG_NO_MARK = (
     "lecture bloquée par précaution."
 )
 
-POLICY_LISTS = ("safe_tools", "confirm_in_bureau", "main_session_agents")
+POLICY_LISTS = ("safe_tools", "confirm_in_bureau", "main_session_agents", "free_write_dirs")
+# File tools and the input field that names the file they change.
+FILE_TOOLS = {"Edit": "file_path", "Write": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 POLICY_STRINGS = ("mail_prefix", "mail_server", "atelier_agent")
 
 
@@ -129,6 +133,29 @@ def block(reason: str) -> int:
     return 2
 
 
+def in_free_write_dir(tool: str, tool_input: dict[str, Any], policy: dict[str, Any]) -> bool:
+    """True when a file tool changes a file inside one of the free-write directories.
+
+    Symbolic links are resolved on both sides, so a link in the inbox that points elsewhere
+    does not count as the inbox. Anything unusual (relative path, missing field) is False.
+    """
+    field = FILE_TOOLS.get(tool)
+    target = tool_input.get(field) if field else None
+    if not isinstance(target, str) or not os.path.isabs(target):
+        return False
+    try:
+        resolved = os.path.realpath(target)
+        for directory in policy["free_write_dirs"]:
+            if not os.path.isabs(directory):
+                continue
+            root = os.path.realpath(directory)
+            if os.path.commonpath([resolved, root]) == root:
+                return True
+    except (OSError, ValueError):
+        return False
+    return False
+
+
 def touches_mailbox(tool: str, tool_input: dict[str, Any], policy: dict[str, Any]) -> bool:
     if tool.startswith(policy["mail_prefix"]):
         return True
@@ -186,7 +213,8 @@ def main(argv: list[str]) -> int:
         return decide(event, "ask", MSG_EXPOSED)
 
     if data.get("agent_type") != policy["atelier_agent"] and tool in policy["confirm_in_bureau"]:
-        return decide(event, "ask", MSG_BUREAU)
+        if not in_free_write_dir(tool, tool_input, policy):
+            return decide(event, "ask", MSG_BUREAU)
 
     return 0
 

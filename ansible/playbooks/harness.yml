@@ -1,23 +1,24 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Configures the agent harness (opencode, Claude Code) on the entrepreneur's computer.
-# Run it on that computer with `bin/dokopilot harness <client> [--dest DIR]`.
+# Configures the agent harness (opencode, Claude Code) on the computer of one person, inside
+# the person's clone of the company's context repository (docs/plan-v0.2.md C-4).
+# Run it on that computer with `bin/dokopilot harness <client> [--person <id>] [--dest DIR]`.
 #
-# Play 1 reads, on the server and with sudo, the token of the entrepreneur's assistant user
-# (and the MagicDNS name in tailscale mode). Play 2 renders the workspace on this computer.
-# Tests and automation can skip play 1 by passing harness_assistant_credentials (and, in
-# tailscale mode, harness_tailscale_dns_name) in a vars file: see ansible/roles/harness.
+# Play 1 reads on the server, with sudo, the person's Forgejo credentials, the Dokos
+# credentials of the assistant (dirigeant only, decision D-29), the address of Forgejo and,
+# in tailscale mode, the MagicDNS name. Play 2 clones or updates the context repositories
+# and renders the harness on this computer. Tests and automation can inject the server reads
+# in a vars file (see ansible/roles/harness/defaults/main.yml).
 
-- name: Read the assistant credentials on the server
+- name: Read the credentials of the person on the server
   hosts: dokopilot
   gather_facts: false
   roles:
     - role: config
   tasks:
-    - name: Read the token of the assistant user and the name of the server
+    - name: Read the person's credentials and the addresses of Forgejo and Dokos
       ansible.builtin.include_role:
         name: harness
         tasks_from: server.yml
-      when: harness_assistant_credentials is not defined
 
 - name: Configure the harness on this computer
   hosts: localhost

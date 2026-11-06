@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The person this workstation is configured for: -e dokopilot_person=<id> (bin/dokopilot
+# --person), by default the dirigeant. Included by both plays of harness.yml.
+#   _harness_person      the entry of dp.users.people (assistant_email filled by the config role)
+#   _harness_dirigeant   true for the dirigeant
+#   _harness_dokos_user  the person's assistant has a Dokos user: the dirigeant's only (D-29)
+
+- name: Find the person who uses this workstation
+  vars:
+    _id: "{{ (dokopilot_person | default('', true) | string) or dp.users.dirigeant.id }}"
+  ansible.builtin.set_fact:
+    _harness_person: "{{ dp.users.people | selectattr('id', 'equalto', _id) | first | default({}) }}"
+
+- name: Check the person and their assistant
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _harness_person.id is defined
+      - _harness_person.assistant | default(false) | bool
+      - _harness_person.assistant_email | default('') | length > 0
+    fail_msg: >-
+      {{ ('Personne « ' ~ (dokopilot_person | default('?')) ~ ' » inconnue dans users.people.')
+         if _harness_person.id is not defined else
+         (_harness_person.first_name ~ ' n’a pas d’assistant (assistant: false dans users.people) : '
+          ~ 'le harnais configure l’assistant de la personne. Passez assistant à true, lancez '
+          ~ '« bin/dokopilot install ' ~ dp.client.id ~ ' », puis relancez « bin/dokopilot harness '
+          ~ dp.client.id ~ ' --person ' ~ _harness_person.id ~ ' ».') }}
+
+- name: Keep what the person is entitled to
+  ansible.builtin.set_fact:
+    _harness_dirigeant: "{{ _harness_person.role == 'dirigeant' }}"
+    _harness_dokos_user: "{{ _harness_person.role == 'dirigeant' }}"
+    _harness_assistant_identity:
+      name: "{{ harness_assistant_name | replace('{first_name}', _harness_person.first_name) }}"
+      email: "{{ _harness_person.assistant_email }}"

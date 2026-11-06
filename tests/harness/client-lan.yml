@@ -1,11 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Layered on clients/demo/client.yml by run.sh: both harnesses, mail and calendar on.
-# The public key is a throwaway test key, not a secret; the hosts do not exist.
+# Layered on clients/demo/client.yml by run.sh: the dirigeant (Camille), both harnesses, mail
+# and calendar on, Mistral models (small left empty: the config role sets it to the Bureau
+# model), Claude Code with a subscription. The public key is a throwaway test key, not a
+# secret; the hosts do not exist.
 maintenance:
   users:
     - name: integrateur
       ssh_public_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICdlz24XChizBwhFPp6gSD44SkpfKjNkaDkSJAQyvIlB test@example"]
   sudo_requires_password: true
+
+models:
+  provider: mistral
+  bureau: mistral/mistral-medium-latest
+  atelier: mistral/devstral-medium-latest
+  claude_code_auth: subscription
 
 harness:
   default: opencode
