@@ -96,3 +96,27 @@ install_ca() {
   docker cp "$ca_file" "$container:/usr/local/share/ca-certificates/dokopilot-test-ca.crt" >/dev/null
   docker exec "$container" chmod 644 /usr/local/share/ca-certificates/dokopilot-test-ca.crt
 }
+
+# compensate_clock CONTAINER: containers share this machine's clock; when it runs behind,
+# apt refuses freshly signed Release files (Date in the future, sqv's --not-after). Test only,
+# as in tests/system/run.sh: measure the skew against deb.debian.org and relax these two
+# checks by that much. Nothing the installer or the roles do is changed.
+compensate_clock() {
+  local container="$1" server_date server_epoch skew=0
+  docker exec "$container" test -x /usr/bin/apt-get || return 0
+  server_date="$(curl -sSI --max-time 10 https://deb.debian.org/ 2>/dev/null | sed -n 's/^[Dd]ate: //p' | tr -d '\r' || true)"
+  if [[ -n "$server_date" ]] && server_epoch="$(date -u -d "$server_date" +%s 2>/dev/null)"; then
+    skew=$((server_epoch - $(date -u +%s)))
+  fi
+  ((skew > 120)) || return 0
+  echo "This machine's clock is $skew s behind deb.debian.org: apt in $container accepts that much"
+  docker exec "$container" sh -ec 'mkdir -p /etc/apt/apt.conf.d
+    echo "Acquire::Check-Date \"false\";" > /etc/apt/apt.conf.d/99dokopilot-test-clock'
+  docker exec "$container" test -x /usr/bin/sqv || return 0
+  docker exec -i "$container" sh -ec 'dpkg-divert --quiet --local --rename --divert /usr/bin/sqv.real --add /usr/bin/sqv
+    cat > /usr/bin/sqv; chmod 755 /usr/bin/sqv' <<SQV
+#!/bin/sh
+# DokoPilot installer test only: compensates a host clock that is $skew s behind.
+exec /usr/bin/sqv.real --not-after "\$(date -u -d "@\$((\$(date +%s) + $skew + 600))" +%Y-%m-%dT%H:%M:%SZ)" "\$@"
+SQV
+}

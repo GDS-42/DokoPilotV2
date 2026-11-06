@@ -26,11 +26,12 @@ lint: ## Vérifier YAML, rôles Ansible, scripts shell et Python
 	cd ansible && ANSIBLE_CONFIG=ansible.cfg ../$(VENV)/bin/ansible-lint playbooks roles
 	@if command -v shellcheck >/dev/null; then shellcheck $$(git ls-files '*.sh'); else echo "shellcheck absent : contrôle des scripts shell ignoré"; fi
 	$(PY) -m py_compile bin/dokopilot
-	$(PY) -m compileall -q stack demo harness tests ansible/roles
+	$(PY) -m compileall -q stack demo harness tests ansible/roles installer
 
 .PHONY: test
-test: ## Tests rapides (CLI, configuration, harnais), sans serveur
+test: ## Tests rapides (CLI, configuration, installateur, harnais), sans serveur
 	$(PY) -m unittest discover -s tests/cli
+	$(PY) -m unittest discover -s tests/installer -p 'test_*.py'
 	tests/config/run.sh
 	tests/harness/run.sh
 
@@ -41,6 +42,14 @@ test-system: ## Rôles système contre un conteneur Debian 13 systemd (Docker re
 .PHONY: test-e2e
 test-e2e: ## Installation complète comme sur une VM (site, contrôles, harnais, sauvegarde) dans le conteneur Debian 13 (~6 Go de RAM)
 	DP_TEST_SITE=1 tests/system/run.sh
+
+.PHONY: test-installer
+test-installer: ## install.sh et l'assistant sur Debian 13, Ubuntu 24.04 et Fedora, jusqu'à la configuration (Docker)
+	tests/installer/run.sh
+
+.PHONY: test-local-mode
+test-local-mode: ## Mode « tout sur cette machine » : durcissement lancé par le compte lui-même (Docker)
+	tests/installer/local-mode.sh
 
 .PHONY: test-stack
 test-stack: ## Pile Dokos, provisionnement et données de test dans Docker (Docker requis, ~8 Go de RAM)

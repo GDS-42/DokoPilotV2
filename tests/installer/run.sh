@@ -216,6 +216,7 @@ test_distro() {
   containers+=("$container")
   docker run -d --name "$container" --hostname "dp-$distro" --network "$network" "$image" sleep infinity >/dev/null
   install_ca "$container"
+  compensate_clock "$container"
   # Test setup, as root: sudo and an account allowed to use it without a password (as on a
   # cloud image), and, on Fedora, dnf through the relayed proxy. Everything else is the
   # installer's job.

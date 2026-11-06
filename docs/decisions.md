@@ -142,3 +142,12 @@ Décisions prises avec le porteur du projet le 2026-11-06 ; la spécification qu
 - **Jetons** : portée `write:repository`, limités aux dépôts du compte ; un jeton est remplacé quand ses dépôts changent, ce qui demande de relancer `bin/dokopilot harness`.
 - **Sauvegarde** : Forgejo est arrêté quelques secondes et son volume copié en entier avant restic, plutôt qu'un `forgejo dump` ; la restauration est décrite dans exploitation.md.
 - **Fonctions coupées** : inscription, courriels, télémétrie, OAuth, webhooks, Actions, paquets, fédération ; les équipes écrivent dans le code, les tickets, les demandes de fusion et le wiki.
+
+## D-31 — Installateur et mode « tout sur cette machine »
+
+- **Seuils** : en mode local, 30 Go libres dans `/var` au minimum (40 conseillés) et au moins 7,5 Gio de mémoire visible, car une VM de 40 Go n'a qu'environ 37 Go libres après Debian ; ces seuils se règlent par variables d'environnement pour les tests.
+- **Modèles proposés par défaut** seulement quand leurs identifiants ont été vérifiés : Anthropic (Bureau `claude-sonnet-5-5`, Atelier `claude-opus-5-5`, petit modèle `claude-haiku-5-5`) et Mistral (`mistral-large-4`, sans petit modèle) ; pour les autres fournisseurs, l'assistant demande l'identifiant.
+- **Identifiant** : `demo` est refusé par l'assistant (le dossier `clients/demo` est versionné) ; il propose `atelier-demo`.
+- **Mode local** : `server.address` vaut `localhost` et le nom de la machine est conservé ; le compte qui lance le script devient compte de maintenance sans que son mot de passe change, sa règle sudo sans mot de passe éventuelle est retirée (sudo demande alors son propre mot de passe), et le rôle refuse un compte dont le mot de passe est verrouillé.
+- **Ordre de durcissement** : la règle sudo du groupe de maintenance est écrite avant tout changement de groupe d'un compte ; les réglages SSH sont écrits avant l'installation d'`openssh-server`, pour qu'un serveur SSH nouvellement installé démarre déjà durci.
+- **Mots de passe de messagerie et d'agenda** : saisis masqués par l'assistant et écrits sur le poste (`~/.config/dokopilot/<client>/`, 0600), jamais dans les fichiers du client ni dans les secrets du serveur.

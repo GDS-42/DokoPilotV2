@@ -28,7 +28,9 @@ VENV_PYTHON = REPO / ".venv" / "bin" / "python"
 try:
     import yaml
 except ImportError:  # pragma: no cover - depends on the workstation
-    if VENV_PYTHON.exists() and Path(sys.executable).resolve() != VENV_PYTHON.resolve():
+    # Compare environments, not interpreter files: .venv/bin/python is often a symlink to the
+    # system python, so resolved paths are equal while the packages differ.
+    if VENV_PYTHON.exists() and Path(sys.prefix).resolve() != (REPO / ".venv").resolve():
         os.execv(str(VENV_PYTHON), [str(VENV_PYTHON), __file__, *sys.argv[1:]])
     sys.exit("PyYAML est introuvable : lancez d'abord « make setup » à la racine du dépôt.")
 

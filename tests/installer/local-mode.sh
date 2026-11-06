@@ -131,22 +131,7 @@ for _ in $(seq 60); do
 done
 ok "systemd ($state) running in $container ($machine_ip)"
 install_ca "$container"
-# Containers share the host clock; when it runs behind, apt (sqv) rejects freshly signed
-# Release files. Test only, as in tests/system/run.sh: move sqv's limit by the measured skew.
-server_date="$(curl -sSI --max-time 10 https://deb.debian.org/ 2>/dev/null | sed -n 's/^[Dd]ate: //p' | tr -d '\r' || true)"
-skew=0
-if [[ -n "$server_date" ]] && server_epoch="$(date -u -d "$server_date" +%s 2>/dev/null)"; then
-  skew=$(( server_epoch - $(date -u +%s) ))
-fi
-if (( skew > 120 )); then
-  on_machine_stdin sh -ec 'dpkg-divert --quiet --local --rename --divert /usr/bin/sqv.real --add /usr/bin/sqv
-    cat > /usr/bin/sqv; chmod 755 /usr/bin/sqv
-    echo "Acquire::Check-Date \"false\";" > /etc/apt/apt.conf.d/99dokopilot-test-clock' <<EOF
-#!/bin/sh
-# DokoPilot installer test only: compensates a host clock that is $skew s behind.
-exec /usr/bin/sqv.real --not-after "\$(date -u -d "@\$((\$(date +%s) + $skew + 600))" +%Y-%m-%dT%H:%M:%SZ)" "\$@"
-EOF
-fi
+compensate_clock "$container"
 
 # The person's password and the key of her laptop (as if she had copied it with ssh-copy-id).
 printf 'camille:%s\n' "$camille_password" | on_machine_stdin chpasswd
