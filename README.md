@@ -33,6 +33,7 @@ Sur une Debian 13 fraîchement installée, qui devient le serveur (une VM de tes
 poste qui pilotera un serveur distant, avec votre compte personnel (pas root) :
 
 ```bash
+command -v curl || sudo apt install -y curl     # Debian n'installe pas toujours curl
 curl -fsSL https://raw.githubusercontent.com/GDS-42/DokoPilotV2/v0.2.0/install.sh | sh
 ```
 
