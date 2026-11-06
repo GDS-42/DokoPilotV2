@@ -24,6 +24,17 @@ Debian 12 n'est pas accepté comme poste : il fournit Python 3.11, et Ansible 2.
 Python 3.12 ou plus. macOS n'est pas pris en charge par le script : suivez le chemin manuel
 (partie 2).
 
+Le mode « tout sur cette machine » transforme la machine en serveur : réservez-le à une machine
+(ou une VM) dédiée, jamais à votre ordinateur de tous les jours. Votre compte y devient compte
+de maintenance et ne garde que ce rôle : il quitte ses autres groupes (`sudo`, `audio`,
+`plugdev`…), le pare-feu ne laisse entrer que SSH et, en mode `lan`, Dokos et Forgejo depuis le
+réseau privé. En mode `lan`, Forgejo est configuré pour cette machine seule
+(`http://localhost:3000/`) : d'autres ordinateurs ouvrent Dokos par `http://<IP>`, mais les
+liens de Forgejo et les copies du contexte ne marchent que depuis la machine elle-même. Pour
+que d'autres postes travaillent avec le contexte, installez en mode serveur distant, ou avec
+Tailscale. Avant de rendre la main, l'assistant fait oublier à sudo le mot de passe tapé pendant
+l'installation (`sudo -K`) : l'agent, lancé ensuite sous ce même compte, ne peut pas s'en servir.
+
 ### Ce que l'entrepreneur prépare, à son nom (production)
 
 | Élément | Recommandation |

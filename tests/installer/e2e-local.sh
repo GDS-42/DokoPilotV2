@@ -257,7 +257,13 @@ expect_contains "install.sh: every step ran, checks passed, French summary print
   "Votre compte « camille » devient le compte de maintenance" "bin/dokopilot install $client --local -K" \
   "bin/dokopilot harness $client --local -K" "bin/dokopilot check $client --local -K" \
   "Installation terminée pour « Atelier E2E » \\($client\\)" 'Dokos +http://localhost' 'Forgejo +http://localhost:3000/' \
-  "Espace +~/DokoPilot/$client" '· opencode : le harnais par défaut' '· Claude Code : le harnais en option'
+  "Espace +~/DokoPilot/$client" '· opencode : le harnais par défaut' '· Claude Code : le harnais en option' \
+  'sudo a oublié votre mot de passe \(sudo -K\)' "[~]/DokoPilotV2/bin/dokopilot sync $client"
+# sudo -K removed every cached credential of camille (the agent would otherwise inherit them).
+if on_machine test -e /run/sudo/ts/camille; then
+  fail "sudo still holds cached credentials of camille after the installation (/run/sudo/ts/camille)"
+fi
+ok "sudo holds no cached credential of camille after the installation (sudo -K)"
 grep -q 'BECOME password' "$work/install.log" || fail "Ansible never asked for the sudo password"
 
 # ------------------------------------------------------------------ server
@@ -346,7 +352,9 @@ ok "no token, password or key in the workspace (Git history included)"
 step "bin/dokopilot sync pushes the work of the person"
 as_camille sh -ec "cd $workspace && printf 'Note de test.\n' > 00-Boite-de-reception/note-e2e.md && git add 00-Boite-de-reception/note-e2e.md \
   && git commit -q -m 'Note de test'"
-must_terminal sync DokoPilotV2/.venv/bin/python DokoPilotV2/bin/dokopilot sync "$client"
+must_terminal sync DokoPilotV2/.venv/bin/python DokoPilotV2/bin/dokopilot sync "$client" --yes
+expect_contains "sync shows what it sends" "$(cat "$work/sync.log")" \
+  '« entreprise » : 1 enregistrement\(s\) à envoyer' 'note-e2e\.md \| 1 \+' '✓ entreprise : 1 envoyé\(s\)'
 local_head="$(as_camille git -C "$workspace" rev-parse HEAD)"
 remote_head="$(as_camille git -C "$workspace" ls-remote origin HEAD | cut -f1)"
 [[ "$local_head" == "$remote_head" ]] || fail "sync did not push: local $local_head, Forgejo $remote_head"

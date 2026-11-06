@@ -239,6 +239,7 @@ secrets:
   dokos_admin_password: "$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
   entrepreneur_password: "$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
   restic_password: "$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
+  forgejo_admin_password: "$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
   restic_env: {}
   tailscale_auth_key: ""
   etransactions: {}

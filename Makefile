@@ -32,6 +32,7 @@ lint: ## Vérifier YAML, rôles Ansible, scripts shell et Python
 test: ## Tests rapides (CLI, configuration, installateur, harnais), sans serveur
 	$(PY) -m unittest discover -s tests/cli
 	$(PY) -m unittest discover -s tests/installer -p 'test_*.py'
+	$(PY) -m unittest discover -s tests/context -p 'test_*.py'
 	tests/config/run.sh
 	tests/harness/run.sh
 

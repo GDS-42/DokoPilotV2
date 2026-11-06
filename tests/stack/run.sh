@@ -99,7 +99,8 @@ client["maintenance"]["users"] = [
 client["backup"] = {**client.get("backup", {}), "repository": f"{prefix}/restic"}
 yaml.safe_dump(client, open(f"{work}/client.yml", "w", encoding="utf-8"), allow_unicode=True)
 
-names = ["maintenance_sudo_password", "db_root_password", "dokos_admin_password", "entrepreneur_password", "restic_password"]
+names = ["maintenance_sudo_password", "db_root_password", "dokos_admin_password", "entrepreneur_password", "restic_password",
+         "forgejo_admin_password"]
 data = {"secrets": {name: secrets.token_urlsafe(24) for name in names}}
 data["secrets"].update({"restic_env": {}, "tailscale_auth_key": "", "etransactions": {}, "ai_providers": {}})
 yaml.safe_dump(data, open(f"{work}/secrets.yml", "w", encoding="utf-8"))

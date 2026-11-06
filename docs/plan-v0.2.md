@@ -92,7 +92,7 @@ Ajout dans `config/secrets.example.yml` : `forgejo_admin_password: generate`. Le
 | Comptes | administrateur `dokopilot-admin` (`secrets.forgejo_admin_password`) ; une personne = un compte `<id>` (courriel, nom, mot de passe initial aléatoire, à changer par la personne : un changement imposé bloquerait Git, voir D-30) ; un assistant = un compte `assistant-<id>` (courriel `assistant_email`, pas de connexion web utile) |
 | Organisation et dépôts | organisation `<client.id>` ; dépôts `entreprise`, `direction` (si `context.direction`), `perso-<id>` pour chaque personne |
 | Droits | équipe `membres` (toutes les personnes et leurs assistants) en écriture sur `entreprise` ; équipe `direction` (dirigeant et son assistant) en écriture sur `direction` ; `perso-<id>` : la personne (administratrice) et son assistant (écriture) ; personne d'autre |
-| Identifiants | `/etc/dokopilot/forgejo/<compte>.json` (root, 0600, dossier 0700) = `{"user", "password", "token"}`, créé seulement s'il manque (idempotent) |
+| Identifiants | `/etc/dokopilot/forgejo/<compte>.json` (root, 0600, dossier 0700) = `{"user", "password", "token"}` pour une personne, `{"user", "password"}` pour un assistant (aucun jeton, D-32), créé seulement s'il manque (idempotent) |
 | Sauvegarde | `forgejo dump` (ou copie cohérente du volume) dans le dossier de sauvegarde, avant restic ; restauration documentée |
 | Contrôles | `check.yml` : Forgejo répond, l'organisation et les dépôts existent, un assistant non dirigeant ne lit pas `direction` |
 
@@ -154,7 +154,7 @@ context/
 ## C-5 Installateur
 
 - **`install.sh`** (racine du dépôt, POSIX `sh`, shellcheck propre) : options `--version <étiquette>`, `--dir <dossier>` (défaut `~/DokoPilotV2`), `--check` (vérifications seules), `--answers <fichier>` (sans question), `--yes`.
-  1. Vérifie : système (`/etc/os-release` : Debian 12 ou 13, Ubuntu 24.04 ou plus, Fedora 41 ou plus comme poste ; Debian 13 amd64 pour « tout sur cette machine »), architecture, mémoire, disque libre, accès réseau aux sites nécessaires, `sudo`.
+  1. Vérifie : système (`/etc/os-release` : Debian 13, Ubuntu 24.04 ou plus, Fedora 41 ou plus comme poste ; Debian 12 refusé, Python 3.11 ; Debian 13 amd64 pour « tout sur cette machine »), architecture, mémoire, disque libre, accès réseau aux sites nécessaires, `sudo`.
   2. Installe ce qui manque avec `apt` ou `dnf` : `git`, `python3` (3.12 ou plus) et `venv`, `age`, client OpenSSH, `make`, `curl`.
   3. Récupère DokoPilot à l'étiquette demandée (défaut : celle du script) par `git clone --depth 1 --branch`.
   4. Lance `make setup`, puis l'assistant `installer/wizard.py` avec le Python du `.venv`.
