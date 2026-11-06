@@ -58,7 +58,7 @@ Usage : sh install.sh [options]
   --check                vérifier cette machine seulement, sans rien installer
   --answers <fichier>    répondre aux questions avec ce fichier, sans rien demander
                          (modèle commenté : installer/answers.example.yml)
-  --yes                  accepter les confirmations (installation des paquets, reprise)
+  --yes                  répondre oui aux confirmations dont la réponse proposée est oui
   --help                 afficher cette aide
 
 Le script vérifie la machine, installe ce qui manque (apt ou dnf, avec sudo), récupère

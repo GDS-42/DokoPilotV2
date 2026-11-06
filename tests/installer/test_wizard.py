@@ -99,6 +99,12 @@ class ScriptedAnswers(unittest.TestCase):
             self.assertEqual(self.ui({"where": "Remote"}).choice("where", "Où ?", options, "local"), "distant")
             self.assertEqual(self.ui({}).choice("where", "Où ?", options, "local"), "local")
 
+    def test_assume_yes_keeps_the_default_of_a_no_question(self) -> None:
+        ui = wizard.Ui(None, "", True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(ui.confirm("Écrire cette configuration ?"))
+            self.assertFalse(ui.confirm("Une installation existe déjà : la remplacer ?", default=False))
+
     def test_yes_no_accepts_french_and_yaml_booleans(self) -> None:
         with self.quiet():
             self.assertTrue(self.ui({"a": "oui"}).yes_no("a", "?", False))

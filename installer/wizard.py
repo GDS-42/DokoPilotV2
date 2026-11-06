@@ -356,9 +356,11 @@ class Ui:
             return value
 
     def confirm(self, question: str, default: bool = True) -> bool:
+        # --yes (and --answers) accept the confirmations that are yes by default; a question
+        # whose default is no (replacing an existing installation) keeps its default.
         if self.assume_yes:
-            print(f"  {question} oui (automatique)")
-            return True
+            print(f"  {question} {'oui' if default else 'non'} (automatique)")
+            return default
         return parse_bool(self.ask("", question, default="oui" if default else "non", hint="O/n" if default else "o/N"))
 
 
