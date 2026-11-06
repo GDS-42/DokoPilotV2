@@ -40,7 +40,11 @@ test-system: ## Rôles système contre un conteneur Debian 13 systemd (Docker re
 	tests/system/run.sh
 
 .PHONY: test-e2e
-test-e2e: ## Installation complète comme sur une VM (site, contrôles, harnais, sauvegarde) dans le conteneur Debian 13 (~6 Go de RAM)
+test-e2e: ## Installation complète par install.sh, tout sur la machine, comme sur une VM neuve (Docker, ~6 Go de RAM, 1 h)
+	tests/installer/e2e-local.sh
+
+.PHONY: test-site
+test-site: ## Installation complète d'un serveur distant par Ansible (site, contrôles, harnais, sauvegarde), conteneur Debian 13 (~6 Go de RAM)
 	DP_TEST_SITE=1 tests/system/run.sh
 
 .PHONY: test-installer

@@ -181,7 +181,7 @@ context/
 | `tests/context/run.sh` | Forgejo réel en conteneur : comptes, équipes, dépôts remplis une seule fois, droits (un assistant non dirigeant ne lit pas `direction`, n'écrit pas dans le `perso` d'un autre), second passage sans changement |
 | `tests/installer/run.sh` | `install.sh --check` et l'assistant en mode `--answers` dans des conteneurs Debian 13, Ubuntu 24.04 et Fedora, jusqu'à la configuration validée (sans installer le serveur) |
 | `tests/harness/run.sh` | copies Git, identifiants hors de l'espace de travail, droits d'écriture du contexte, modèles et `small_model`, skills renommées |
-| `make test-e2e` (`DP_TEST_SITE=1`) | installation complète **en mode local** par `install.sh --answers` dans le conteneur Debian 13 : Dokos, Forgejo, contexte, harnais, contrôles, sauvegarde ; second passage sans changement |
+| `make test-e2e` (`tests/installer/e2e-local.sh`) | installation complète **en mode local** par `install.sh --answers` dans le conteneur Debian 13 : Dokos, Forgejo, contexte, harnais, contrôles, sauvegarde ; second passage sans changement |
 | Relecture indépendante | conformité aux règles de `CLAUDE.md`, sécurité (Forgejo, jetons Git), parcours utilisateur sur VM |
 
 La version est étiquetée `v0.2.0` quand tout cela passe ; la commande `curl` du README pointe sur cette étiquette.
