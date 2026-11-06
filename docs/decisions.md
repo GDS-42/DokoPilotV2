@@ -110,3 +110,21 @@ La règle « logiciels libres uniquement » s'applique à ce dépôt et à ce qu
 - **Choix** : aucun flux GitHub Actions, ni aucune autre fonctionnalité payante (Codespaces, Packages, LFS). Les vérifications tournent sur le poste ou dans la session de travail : `make ci` (lint, tests rapides, rôles système), plus `make test-e2e` et `make test-stack` quand l'installation ou la pile Dokos changent ; chaque pull request indique les commandes lancées et leurs résultats.
 - **Revoir si** : le dépôt devient public (Actions y est gratuit) ou le porteur du projet choisit un service d'intégration continue.
 
+
+## D-18 à D-28 — Contexte préinstallé et installation en une commande (version 0.2)
+
+Décisions prises avec le porteur du projet le 2026-11-06 ; la spécification qui en découle est [plan-v0.2.md](plan-v0.2.md). Elles prolongent le dossier de transmission du système IA (organisation du contexte en trois couches : statique, capacités, dynamique).
+
+| # | Décision | Raison |
+| --- | --- | --- |
+| D-18 | La référence du contexte est un ensemble de dépôts Git dans **Forgejo**, sur le serveur de l'entreprise, joignable seulement par le réseau privé | Source unique dans le réseau privé, droits par équipe, interface de relecture ; Forgejo est libre (GPL-3.0 ou plus) |
+| D-19 | Le script s'utilise en **deux modes** : tout sur cette machine (Debian 13) ou piloter un serveur distant depuis un poste (Debian, Ubuntu, Fedora) | Démo, très petite structure et cas général avec le même outil |
+| D-20 | Trois sortes de dépôts : **entreprise** (tous), **direction** (dirigeant et son assistant), **perso** (un par personne) | Git ne gère pas la lecture fichier par fichier : un dépôt par périmètre de droits |
+| D-21 | L'agent écrit **librement** dans la boîte de réception et dans le contexte perso, **sur accord** ailleurs ; il ne pousse jamais : la personne pousse (`bin/dokopilot sync`) | L'agent propose, l'humain valide ; le jeton Git reste hors de portée du shell de l'agent |
+| D-22 | Un **compte assistant par personne** dans Forgejo, comme dans Dokos ; les commits de l'agent sont signés « Assistant de <Prénom> » | Droits délégués et traçabilité |
+| D-23 | Deux agents, **Bureau** et **Atelier**, un modèle chacun ; **`small_model` toujours fixé** | Limiter les combinaisons ; éviter qu'un modèle par défaut hébergé par un tiers voie les sessions |
+| D-24 | Le modèle est **agnostique** : fournisseur et modèles choisis à l'installation, clé sur le poste seulement ; avec Claude Code, abonnement Claude ou clé API au choix ; avec opencode, clé API | Remplaçabilité ; les abonnements Claude ne s'utilisent qu'avec Claude Code |
+| D-25 | Le contexte est **préinstallé** : arborescence 00 à 90, huit fonctions d'une TPE, description des sources de données, modèles de notes, `AGENTS.md` avec huit règles ; aucun savoir inventé | Partir d'un cadre commun, laisser les vrais skills naître des tâches de l'entreprise |
+| D-26 | Deux familles de skills : `dokopilot-…` (fournies et mises à jour par DokoPilot, ignorées par Git) et celles de l'entreprise (versionnées, jamais écrasées) | Mettre à jour le produit sans toucher au savoir-faire de l'entreprise |
+| D-27 | L'import d'un contexte existant passe par la boîte de réception, trié et relu par un humain, jamais fusionné automatiquement | Un document importé peut contenir des instructions malveillantes |
+| D-28 | Le remplissage d'un dépôt de contexte n'a lieu que s'il est vide ; aucune mise à jour automatique d'un contexte existant en version 0.2 | Ne jamais écraser le travail de l'entreprise |
