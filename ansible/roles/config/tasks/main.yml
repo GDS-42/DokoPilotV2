@@ -15,6 +15,164 @@
       {{ dokopilot_defaults
          | combine(dokopilot_profile_defaults[_dp_profile] | default({}), _dp_user, recursive=True) }}
 
+- name: Refuse the users format of version 0.1
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "'entrepreneur' not in dp.users"
+      - "'assistants' not in dp.users"
+    fail_msg: |-
+      users.entrepreneur et users.assistants ne sont plus acceptés : déclarez chaque personne dans users.people (un seul dirigeant), par exemple :
+      users:
+        people:
+          - id: camille
+            email: camille.martin@exemple.fr
+            first_name: Camille
+            last_name: Martin
+            role: dirigeant
+            assistant: true
+      L'adresse de l'assistant vaut par défaut assistant.<id>@<domaine de email> (réglage assistant_email).
+
+- name: Check the list of people
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.users is mapping
+      - dp.users.people is sequence
+      - dp.users.people is not string
+      - dp.users.people is not mapping
+      - dp.users.people | length > 0
+      - dp.users.people | reject('mapping') | list | length == 0
+    fail_msg: >-
+      users.people doit être une liste de personnes (au moins le dirigeant), chacune avec
+      id, email, first_name, last_name et role : voir config/client.example.yml.
+
+- name: Check each person
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.id | default('') | string is match(dokopilot_person_id_regex)
+      - item.email | default('') | string is match(dokopilot_email_regex)
+      - item.first_name | default('') | string | length > 0
+      - item.last_name | default('', true) is string
+      - item.role | default('') in ['dirigeant', 'membre']
+      - item.assistant | default(true) is boolean
+      - item.assistant_email | default('') | string == '' or item.assistant_email | string is match(dokopilot_email_regex)
+    fail_msg: >-
+      Personne « {{ item.id | default('?') }} » invalide : id en minuscules (une lettre puis
+      lettres, chiffres ou tirets, 2 à 31 caractères), email valide, first_name renseigné,
+      role dirigeant ou membre, assistant true ou false, assistant_email vide ou valide.
+  loop: "{{ dp.users.people }}"
+  loop_control:
+    label: "{{ item.id | default('?') }}"
+
+- name: Start the list of people afresh (the role runs once per play)
+  ansible.builtin.set_fact:
+    _dp_people: []
+    _dp_assistants: []
+
+- name: Complete each person (assistant and its address)
+  vars:
+    _person: >-
+      {{ {'assistant': true} | combine(item, {'last_name': item.last_name | default('', true)}) }}
+    _assistant_email: >-
+      {{ (_person.assistant_email | default('', true)
+          or ('assistant.' ~ _person.id ~ '@' ~ (_person.email | split('@') | last)))
+         if _person.assistant else '' }}
+  ansible.builtin.set_fact:
+    _dp_people: "{{ _dp_people + [_person | combine({'assistant_email': _assistant_email})] }}"
+    _dp_assistants: "{{ _dp_assistants + ([{'for': _person.email, 'email': _assistant_email}] if _person.assistant else []) }}"
+  loop: "{{ dp.users.people }}"
+  loop_control:
+    label: "{{ item.id }}"
+
+- name: Check the people together
+  vars:
+    _ids: "{{ _dp_people | map(attribute='id') | list }}"
+    _emails: "{{ _dp_people | map(attribute='email') | map('lower') | list }}"
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _ids | unique | length == _ids | length
+      - _emails | unique | length == _emails | length
+    fail_msg: >-
+      users.people : chaque personne a un id et un email qui lui sont propres
+      (id déclarés : {{ _ids | join(', ') }} ; email déclarés : {{ _emails | join(', ') }}).
+
+- name: Check that there is exactly one dirigeant
+  vars:
+    _dirigeants: "{{ _dp_people | selectattr('role', 'equalto', 'dirigeant') | map(attribute='id') | list }}"
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _dirigeants | length == 1
+    fail_msg: >-
+      users.people : il faut exactement un dirigeant (role: dirigeant), les autres personnes
+      sont des membres (role: membre) ; dirigeants déclarés : {{ _dirigeants | join(', ') or 'aucun' }}.
+
+- name: Check the addresses of the assistants
+  vars:
+    _emails: "{{ _dp_people | map(attribute='email') | map('lower') | list }}"
+    _assistant_emails: "{{ _dp_people | map(attribute='assistant_email') | select | map('lower') | list }}"
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _assistant_emails | unique | length == _assistant_emails | length
+      - _assistant_emails | intersect(_emails) | length == 0
+    fail_msg: >-
+      users.people : l'adresse de chaque assistant (assistant_email, par défaut
+      assistant.<id>@<domaine>) doit être unique et différente de celle de toute personne
+      (assistants : {{ _assistant_emails | join(', ') or 'aucun' }}).
+
+# dp.users.assistants lists the Dokos assistants: only the dirigeant's in version 0.2
+# (decision D-29). A member's assistant would hold the Assistant IA role whatever the member's
+# own Dokos rights; members' assistants exist in Forgejo (context) only.
+- name: Derive the users read by the roles (entrepreneur, assistants, dirigeant)
+  vars:
+    _dirigeant: "{{ _dp_people | selectattr('role', 'equalto', 'dirigeant') | first }}"
+  ansible.builtin.set_fact:
+    dp: >-
+      {{ dp | combine({'users': {
+           'people': _dp_people,
+           'dirigeant': _dirigeant,
+           'entrepreneur': {'email': _dirigeant.email, 'first_name': _dirigeant.first_name, 'last_name': _dirigeant.last_name},
+           'assistants': _dp_assistants | selectattr('for', 'equalto', _dirigeant.email) | list
+         }}, recursive=True) }}
+
+- name: Check the context, the models and the local server settings
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.server is mapping and dp.context is mapping and dp.models is mapping
+      - dp.server.local is boolean
+      - dp.context.enabled is boolean
+      - dp.context.direction is boolean
+      - dp.context.import_path is string
+      - dp.models.provider is string
+      - dp.models.provider == '' or dp.models.provider is match(dokopilot_model_provider_regex)
+      - dp.models.bureau is string and (dp.models.bureau == '' or dp.models.bureau is match(dokopilot_model_regex))
+      - dp.models.atelier is string and (dp.models.atelier == '' or dp.models.atelier is match(dokopilot_model_regex))
+      - dp.models.small is string and (dp.models.small == '' or dp.models.small is match(dokopilot_model_regex))
+      - dp.models.claude_code_auth in ['subscription', 'api_key']
+    fail_msg: >-
+      Réglages invalides : server.local, context.enabled et context.direction valent true ou
+      false ; models.provider est un identifiant de fournisseur (ex. mistral) ; models.bureau,
+      models.atelier et models.small sont vides ou de la forme « fournisseur/modèle » (ex.
+      mistral/mistral-medium-latest) ; models.claude_code_auth vaut subscription ou api_key.
+
+- name: Fix the small model to the Bureau model when it is not chosen
+  ansible.builtin.set_fact:
+    dp: "{{ dp | combine({'models': {'small': dp.models.bureau}}, recursive=True) }}"
+  when:
+    - dp.models.small == ''
+    - dp.models.bureau != ''
+
+- name: Check the system of a local server (only when the play has gathered facts)
+  ansible.builtin.include_tasks: local-server.yml
+  when:
+    - dp.server.local
+    - ansible_facts['distribution'] is defined
+
 - name: Derive names that have a sensible default
   ansible.builtin.set_fact:
     dp: >-
@@ -94,16 +252,23 @@
   ansible.builtin.assert:
     quiet: true
     that:
-      - dp.users.entrepreneur.email is match('^[^@\s]+@[^@\s]+$')
-      - dp.users.entrepreneur.first_name | length > 0
-      - dp.users.assistants | map(attribute='email') | select('match', '^[^@\s]+@[^@\s]+$') | list | length == dp.users.assistants | length
-      - dp.users.assistants | map(attribute='for') | difference([dp.users.entrepreneur.email]) | length == 0
+      - dp.users.assistants | map(attribute='for') | difference(dp.users.people | map(attribute='email') | list) | length == 0
       - dp.etransactions.environment in ['sandbox', 'production']
       - dp.harness.default in ['opencode', 'claude-code']
       - dp.harness.enabled | difference(['opencode', 'claude-code']) | length == 0
     fail_msg: >-
-      Réglages métier invalides : vérifiez users.entrepreneur, users.assistants (chaque
-      assistant agit pour une personne déclarée), etransactions.environment et harness.
+      Réglages métier invalides : vérifiez users.people (chaque assistant agit pour une
+      personne déclarée), etransactions.environment et harness.
+
+- name: Check the person chosen for the workstation (bin/dokopilot --person)
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dokopilot_person | string in dp.users.people | map(attribute='id') | list
+    fail_msg: >-
+      Personne « {{ dokopilot_person }} » inconnue : --person prend l'id d'une personne de
+      users.people ({{ dp.users.people | map(attribute='id') | join(', ') }}).
+  when: dokopilot_person is defined
 
 - name: Check the production safeguards
   ansible.builtin.assert:

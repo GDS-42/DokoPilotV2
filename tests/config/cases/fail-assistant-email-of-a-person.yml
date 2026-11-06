@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# An assistant never uses the address of a person (here, the default one of alex is taken by lucas).
+# expect: doit être unique et différente de celle de toute personne
+users:
+  people:
+    - { id: alex, email: dirigeant@example.test, first_name: Alex, role: dirigeant }
+    - { id: lucas, email: assistant.alex@example.test, first_name: Lucas, role: membre, assistant: false }

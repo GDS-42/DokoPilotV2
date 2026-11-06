@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Without a small model, the Bureau model is used for titles and summaries.
+# expect-output: small: mistral/mistral-medium-latest
+# expect-output: claude_code_auth: api_key
+models: { provider: mistral, bureau: mistral/mistral-medium-latest, atelier: mistral/devstral-medium-latest, claude_code_auth: api_key }

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# E-mail addresses are unique, whatever their case.
+# expect: chaque personne a un id et un email qui lui sont propres
+users:
+  people:
+    - { id: alex, email: dirigeant@example.test, first_name: Alex, role: dirigeant }
+    - { id: lucas, email: Dirigeant@Example.test, first_name: Lucas, role: membre }

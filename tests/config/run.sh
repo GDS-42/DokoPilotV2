@@ -5,6 +5,7 @@
 # the config role. Valid settings pass; unsafe ones are refused with their French message.
 #   # expect: <text>          a failing case must print this message
 #   # expect-output: <regex>  a passing case must print this (effective configuration)
+#   # expect-no-output: <regex>  a passing case must not print this
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +46,9 @@ for case_file in "$here"/cases/*.yml; do
   while IFS= read -r pattern; do
     [[ -z "$pattern" ]] || grep -Eq -- "$pattern" "$work/$name.log" || problems+=" missing output /$pattern/"
   done < <(sed -n 's/^# expect-output: //p' "$case_file")
+  while IFS= read -r pattern; do
+    [[ -z "$pattern" ]] || ! grep -Eq -- "$pattern" "$work/$name.log" || problems+=" unexpected output /$pattern/"
+  done < <(sed -n 's/^# expect-no-output: //p' "$case_file")
   if [[ -z "$problems" ]]; then
     echo "ok    $name"
   else

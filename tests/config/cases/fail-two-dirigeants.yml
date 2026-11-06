@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Exactly one person is the dirigeant.
+# expect: il faut exactement un dirigeant
+# expect: dirigeants déclarés : alex, lucas
+users:
+  people:
+    - { id: alex, email: dirigeant@example.test, first_name: Alex, role: dirigeant }
+    - { id: lucas, email: lucas@example.test, first_name: Lucas, role: dirigeant }

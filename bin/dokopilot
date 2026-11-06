@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import secrets as pysecrets
 import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -35,6 +37,10 @@ CONFIG_DEFAULTS = ANSIBLE_DIR / "roles" / "config" / "defaults" / "main.yml"
 PLAYBOOKS = ANSIBLE_DIR / "playbooks"
 DEFAULT_IDENTITY = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "dokopilot" / "age-identity.txt"
 SECRET_PLACEHOLDER = "generate"
+# Same rule as dokopilot_person_id_regex in the config role.
+PERSON_ID = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
+# Clones synchronised by `sync`, relative to the workspace: (name shown, sub-folder).
+WORKSPACE_REPOSITORIES = (("entreprise", ""), ("direction", "direction"), ("perso", "perso"))
 
 
 class IndentedDumper(yaml.SafeDumper):
@@ -127,7 +133,95 @@ def client_settings(client: str) -> dict[str, Any]:
             f"Réglages inconnus pour le client « {client} » : {', '.join(unknown)}. Seuls les réglages de "
             "config/client.example.yml sont acceptés ; les variables internes des rôles ne se changent pas depuis client.yml."
         )
+    check_users_format(settings)
     return settings
+
+
+# --------------------------------------------------------------------------- people
+
+
+def suggested_id(*candidates: str) -> str:
+    """An identifier that matches PERSON_ID, from a first name or the local part of an address."""
+    for candidate in candidates:
+        ascii_text = unicodedata.normalize("NFKD", candidate or "").encode("ascii", "ignore").decode()
+        value = re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-")[:31].strip("-")
+        if PERSON_ID.match(value):
+            return value
+    return "dirigeant"
+
+
+def check_users_format(settings: dict[str, Any]) -> None:
+    """Refuse users.entrepreneur and users.assistants (version 0.1) and show the new form,
+    built from the old values. The config role refuses them too, with a generic example."""
+    users = settings.get("users")
+    if not isinstance(users, dict) or not {"entrepreneur", "assistants"} & set(users):
+        return
+    entrepreneur = users.get("entrepreneur") if isinstance(users.get("entrepreneur"), dict) else {}
+    assistants = [a for a in users.get("assistants") or [] if isinstance(a, dict)]
+    email = str(entrepreneur.get("email") or "camille.martin@exemple.fr")
+    first_name = str(entrepreneur.get("first_name") or "Camille")
+    person_id = suggested_id(first_name, email.split("@")[0])
+    lines = [
+        "users:",
+        "  people:",
+        f"    - id: {person_id}",
+        f"      email: {email}",
+        f"      first_name: {first_name}",
+        f"      last_name: {entrepreneur.get('last_name') or ''}",
+        "      role: dirigeant",
+    ]
+    own = next((a.get("email") for a in assistants if a.get("for") == email), None)
+    lines.append(f"      assistant: {'true' if own or not assistants else 'false'}")
+    if own and own != f"assistant.{person_id}@{email.split('@')[-1]}":
+        lines.append(f"      assistant_email: {own}")
+    for assistant in assistants:
+        other = str(assistant.get("for") or "")
+        if other and other != email:
+            lines += [
+                f"    - id: {suggested_id(other.split('@')[0])}",
+                f"      email: {other}",
+                "      first_name: À compléter",
+                "      last_name: À compléter",
+                "      role: membre",
+                f"      assistant_email: {assistant.get('email')}",
+            ]
+    raise CliError(
+        "users.entrepreneur et users.assistants ne sont plus acceptés : déclarez chaque personne dans "
+        "users.people (un seul dirigeant). Avec vos réglages actuels, cela donne :\n\n"
+        + "\n".join(lines)
+        + "\n\nVérifiez chaque id (minuscules, chiffres, tirets : il nomme les comptes et le dépôt perso-<id>) ; "
+        "l'adresse d'un assistant vaut par défaut assistant.<id>@<domaine de email>."
+    )
+
+
+def people(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    users = settings.get("users")
+    entries = users.get("people") if isinstance(users, dict) else None
+    return [p for p in entries if isinstance(p, dict)] if isinstance(entries, list) else []
+
+
+def person_for(settings: dict[str, Any], requested: str | None) -> dict[str, Any]:
+    """The person a workstation command works for: --person, or by default the dirigeant."""
+    declared = people(settings)
+    if requested is None:
+        dirigeants = [p for p in declared if p.get("role") == "dirigeant"]
+        if len(dirigeants) != 1:
+            raise CliError("users.people doit déclarer exactement un dirigeant (role: dirigeant) : vérifiez avec « bin/dokopilot config ».")
+        chosen = dirigeants[0]
+    else:
+        chosen = next((p for p in declared if str(p.get("id")) == requested), {})
+        if not chosen:
+            ids = ", ".join(str(p.get("id")) for p in declared) or "aucune"
+            raise CliError(f"Personne « {requested} » inconnue : --person prend l'id d'une personne de users.people ({ids}).")
+    if not PERSON_ID.match(str(chosen.get("id", ""))):
+        raise CliError(f"Identifiant de personne invalide : « {chosen.get('id')} » (minuscules, chiffres, tirets).")
+    return chosen
+
+
+def server_is_local(settings: dict[str, Any]) -> bool:
+    """server.local: true, the server is this machine (same as --local for every command)."""
+    server = settings.get("server")
+    return isinstance(server, dict) and server.get("local") is True
 
 
 def private_key_for(settings: dict[str, Any], user: str) -> Path | None:
@@ -224,11 +318,14 @@ def fill_generated(value: Any) -> Any:
 # --------------------------------------------------------------------------- Ansible
 
 
-def inventory(client: str, settings: dict[str, Any], *, user: str | None, local: bool, bootstrap: bool) -> dict[str, Any]:
+def inventory(
+    client: str, settings: dict[str, Any], *, user: str | None, local: bool, bootstrap: bool, ask_become_pass: bool = False
+) -> dict[str, Any]:
     server = settings.get("server", {})
     maintenance_users = [u.get("name") for u in settings.get("maintenance", {}).get("users", []) if u.get("name")]
     host: dict[str, Any] = {}
-    if local:
+    local_server = server_is_local(settings)
+    if local or local_server:
         host["ansible_connection"] = "local"
     else:
         address = server.get("address")
@@ -247,7 +344,14 @@ def inventory(client: str, settings: dict[str, Any], *, user: str | None, local:
         host["ansible_ssh_common_args"] = "-o StrictHostKeyChecking=accept-new" + (" -o IdentitiesOnly=yes" if key else "")
         if key is not None:
             host["ansible_ssh_private_key_file"] = str(key)
-    if not bootstrap and settings.get("maintenance", {}).get("sudo_requires_password", True):
+    # A variable would override the password typed for -K. On a local server, sudo uses the
+    # password of the account that runs the CLI, which is never changed: it comes from -K.
+    if (
+        not bootstrap
+        and not ask_become_pass
+        and not local_server
+        and settings.get("maintenance", {}).get("sudo_requires_password", True)
+    ):
         host["ansible_become_password"] = "{{ secrets.maintenance_sudo_password }}"
     client_id = settings.get("client", {}).get("id", client)
     return {"dokopilot": {"hosts": {client_id: host}}}
@@ -261,7 +365,10 @@ def ansible_playbook(client: str, playbook: str, args: argparse.Namespace, *, bo
     env.setdefault("ANSIBLE_FORCE_COLOR", "1")
     with private_tempdir() as tmp:
         inv = tmp / "inventory.yml"
-        inv.write_text(yaml.safe_dump(inventory(client, settings, user=args.user, local=args.local, bootstrap=bootstrap)), encoding="utf-8")
+        host_inventory = inventory(
+            client, settings, user=args.user, local=args.local, bootstrap=bootstrap, ask_become_pass=args.ask_become_pass
+        )
+        inv.write_text(yaml.safe_dump(host_inventory), encoding="utf-8")
         # One merged file: Ansible would replace, not merge, a dict given in two -e files.
         settings_file = tmp / "client.yml"
         settings_file.write_text(dump_yaml(settings), encoding="utf-8")
@@ -375,9 +482,126 @@ def cmd_playbook(playbook: str, *, bootstrap: bool = False) -> Any:
             extra += ["-e", f"harness_dest={Path(args.dest).expanduser().resolve()}"]
         if getattr(args, "confirm", False):
             extra += ["-e", "restore_confirmed=true"]
+        if hasattr(args, "person"):
+            # person_for() only returns an id that matches PERSON_ID: safe in key=value form.
+            extra += ["-e", f"dokopilot_person={person_for(client_settings(args.client), args.person)['id']}"]
         return ansible_playbook(args.client, playbook, args, bootstrap=bootstrap, extra=extra)
 
     return handler
+
+
+# --------------------------------------------------------------------------- sync (workstation, no Ansible)
+
+
+def workspace_dir(client: str, settings: dict[str, Any], dest: str | None) -> Path:
+    """The workspace rendered by `harness`: --dest, or ~/DokoPilot/<client id>."""
+    if dest:
+        return Path(dest).expanduser().resolve()
+    client_id = (settings.get("client") or {}).get("id") or client
+    return Path.home() / "DokoPilot" / str(client_id)
+
+
+def git(repo: Path, *args: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", "-C", str(repo), *args], text=True, capture_output=True, env=env)
+
+
+def git_lines(repo: Path, *args: str, env: dict[str, str]) -> list[str]:
+    result = git(repo, *args, env=env)
+    return result.stdout.splitlines() if result.returncode == 0 else []
+
+
+def git_count(repo: Path, revisions: str, env: dict[str, str]) -> int:
+    lines = git_lines(repo, "rev-list", "--count", revisions, env=env)
+    return int(lines[0]) if lines else 0
+
+
+def rebase_in_progress(repo: Path, env: dict[str, str]) -> bool:
+    for name in ("rebase-merge", "rebase-apply"):
+        lines = git_lines(repo, "rev-parse", "--git-path", name, env=env)
+        if lines and (repo / lines[0]).exists():
+            return True
+    return False
+
+
+def git_failure(result: subprocess.CompletedProcess[str]) -> str:
+    output = (result.stderr or result.stdout).strip().splitlines()
+    return "\n".join(f"  {line}" for line in output[-8:])
+
+
+def conflict_message(label: str, repo: Path, files: list[str], client: str) -> str:
+    listed = ", ".join(files) if files else "voir « git status »"
+    return (
+        f"Conflit dans « {label} » ({repo}) : vos changements et ceux reçus du serveur touchent les mêmes "
+        f"passages de : {listed}.\nRien de ce dépôt n'a été envoyé et la synchronisation s'arrête ici.\n"
+        "Pour résoudre : ouvrez ces fichiers, gardez le bon texte entre les marques <<<<<<< et >>>>>>> "
+        "(vous pouvez demander à votre assistant de vous aider), puis lancez :\n"
+        f"  git -C {repo} add -u && git -C {repo} -c core.editor=true rebase --continue\n"
+        f"et relancez « bin/dokopilot sync {client} ». Pour revenir à l'état d'avant la synchronisation : "
+        f"git -C {repo} rebase --abort"
+    )
+
+
+def sync_repository(label: str, repo: Path, client: str, env: dict[str, str]) -> str:
+    """git pull --rebase then git push in one clone; returns the summary line, raises at the first problem."""
+    if rebase_in_progress(repo, env) or git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env):
+        raise CliError(conflict_message(label, repo, git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env), client))
+    modified = git_lines(repo, "status", "--porcelain", "--untracked-files=no", env=env)
+    if modified:
+        files = ", ".join(line[3:] for line in modified[:10]) + (" …" if len(modified) > 10 else "")
+        raise CliError(
+            f"« {label} » ({repo}) : des fichiers modifiés ne sont pas encore enregistrés dans Git : {files}.\n"
+            "Enregistrez-les (git -C " + str(repo) + " commit -am \"<ce qui a changé>\") ou annulez-les, "
+            f"puis relancez « bin/dokopilot sync {client} ». Rien de ce dépôt n'a été envoyé."
+        )
+    untracked = git_lines(repo, "status", "--porcelain", "--untracked-files=all", env=env)
+    head_before = (git_lines(repo, "rev-parse", "--verify", "-q", "HEAD", env=env) or [""])[0]
+    pull = git(repo, "pull", "--rebase", env=env)
+    if pull.returncode != 0:
+        conflicts = git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env)
+        if conflicts or rebase_in_progress(repo, env):
+            raise CliError(conflict_message(label, repo, conflicts, client))
+        raise CliError(
+            f"« {label} » ({repo}) : la récupération des changements du serveur a échoué (réseau, identifiants ou "
+            f"copie sans branche suivie) ; rien n'a été envoyé.\n{git_failure(pull)}"
+        )
+    received = git_count(repo, f"{head_before}..@{{u}}" if head_before else "@{u}", env)
+    to_send = git_count(repo, "@{u}..HEAD", env)
+    push = git(repo, "push", env=env)
+    if push.returncode != 0:
+        raise CliError(
+            f"« {label} » ({repo}) : l'envoi au serveur a été refusé ; si quelqu'un vient d'envoyer des changements, "
+            f"relancez « bin/dokopilot sync {client} ».\n{git_failure(push)}"
+        )
+    parts = [f"{received} changement(s) reçu(s)" if received else "", f"{to_send} envoyé(s)" if to_send else ""]
+    summary = ", ".join(part for part in parts if part) or "déjà à jour"
+    if untracked:
+        summary += f" ; {len(untracked)} nouveau(x) fichier(s) non enregistré(s) dans Git, restés sur ce poste"
+    return f"✓ {label} : {summary}"
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    settings = client_settings(args.client)
+    person = person_for(settings, args.person)
+    workspace = workspace_dir(args.client, settings, args.dest)
+    if not shutil.which("git"):
+        raise CliError("git est introuvable sur ce poste : installez-le (apt install git, dnf install git).")
+    clones = [(label, workspace / sub) for label, sub in WORKSPACE_REPOSITORIES if (workspace / sub / ".git").exists()]
+    if not clones:
+        raise CliError(f"Aucune copie Git dans {workspace} : lancez d'abord « bin/dokopilot harness {args.client} » (ou indiquez --dest).")
+    name = f"{person.get('first_name', '')} {person.get('last_name') or ''}".strip() or str(person["id"])
+    env = dict(os.environ)
+    # Never ask for a password on the terminal (the token is in the credential helper), and
+    # commits replayed by the rebase are committed by the person who synchronises.
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_COMMITTER_NAME=name, GIT_COMMITTER_EMAIL=str(person.get("email", "")))
+    print(f"Synchronisation de {workspace} pour {name} ({person['id']}) :")
+    present = {label for label, _ in clones}
+    for label, sub in WORKSPACE_REPOSITORIES:
+        if label not in present:
+            print(f"· {label} : aucune copie sur ce poste ({workspace / sub})")
+            continue
+        print(sync_repository(label, workspace / sub, args.client, env), flush=True)
+    print(f"Synchronisation terminée ({len(clones)} dépôt(s)).")
+    return 0
 
 
 def cmd_secrets(args: argparse.Namespace) -> int:
@@ -413,6 +637,8 @@ def cmd_secrets(args: argparse.Namespace) -> int:
 
 def cmd_ssh(args: argparse.Namespace) -> int:
     settings = client_settings(args.client)
+    if server_is_local(settings):
+        raise CliError("Le serveur est cette machine (server.local: true) : aucune session SSH n'est nécessaire.")
     inv = inventory(args.client, settings, user=args.user, local=False, bootstrap=False)
     host = next(iter(inv["dokopilot"]["hosts"].values()))
     key = private_key_for(settings, host["ansible_user"])
@@ -430,7 +656,7 @@ def parser() -> argparse.ArgumentParser:
     def with_common(sp: argparse.ArgumentParser) -> argparse.ArgumentParser:
         sp.add_argument("client", help="identifiant du client (dossier clients/<client>)")
         sp.add_argument("--user", help="compte SSH à utiliser (par défaut : premier compte de maintenance)")
-        sp.add_argument("--local", action="store_true", help="exécuter sur cette machine (depuis le serveur lui-même)")
+        sp.add_argument("--local", action="store_true", help="exécuter sur cette machine (depuis le serveur lui-même ; implicite avec server.local: true)")
         sp.add_argument("--check", action="store_true", help="simulation Ansible, sans changement")
         sp.add_argument("-K", "--ask-become-pass", action="store_true", help="demander le mot de passe sudo du compte utilisé (premier passage)")
         sp.add_argument("-v", "--verbose", action="count", default=0)
@@ -473,8 +699,15 @@ def parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_playbook("demo-reset.yml"))
 
     sp = with_common(sub.add_parser("harness", help="générer la configuration du harnais sur ce poste"))
-    sp.add_argument("--dest", help="dossier de travail de l'entrepreneur (par défaut : ~/DokoPilot/<client>)")
+    sp.add_argument("--dest", help="dossier de travail de la personne (par défaut : ~/DokoPilot/<client>)")
+    sp.add_argument("--person", help="id de la personne qui utilise ce poste (users.people ; par défaut : le dirigeant)")
     sp.set_defaults(func=cmd_playbook("harness.yml"))
+
+    sp = sub.add_parser("sync", help="synchroniser les copies du contexte de ce poste avec Forgejo (pull --rebase, puis push)")
+    sp.add_argument("client")
+    sp.add_argument("--person", help="id de la personne qui synchronise (users.people ; par défaut : le dirigeant)")
+    sp.add_argument("--dest", help="dossier de travail (par défaut : ~/DokoPilot/<client>)")
+    sp.set_defaults(func=cmd_sync)
 
     sp = sub.add_parser("secrets", help="lire ou modifier les secrets chiffrés")
     sp.add_argument("client")

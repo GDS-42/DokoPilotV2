@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# users.assistants (version 0.1) is refused: an assistant now belongs to a person of users.people.
+# expect: users.entrepreneur et users.assistants ne sont plus acceptés
+# expect: - id: inconnu
+users:
+  assistants:
+    - { for: inconnu@example.test, email: assistant@example.test }

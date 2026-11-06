@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# An id starts with a lowercase letter and only has lowercase letters, digits and dashes.
+# expect: Personne « Alex.T » invalide
+users:
+  people:
+    - { id: Alex.T, email: dirigeant@example.test, first_name: Alex, role: dirigeant }

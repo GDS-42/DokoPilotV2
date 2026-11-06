@@ -28,14 +28,22 @@ dokos:
   site_name: erp.demo.local
   admin_email: admin@demo.local
 
+# Camille dirige l'atelier, Lucas y travaille ; chacun a son assistant
+# (assistant.camille@atelier-demo.test et assistant.lucas@atelier-demo.test).
 users:
-  entrepreneur:
-    email: camille.martin@atelier-demo.test
-    first_name: Camille
-    last_name: Martin
-  assistants:
-    - for: camille.martin@atelier-demo.test
-      email: assistant.camille@atelier-demo.test
+  people:
+    - id: camille
+      email: camille.martin@atelier-demo.test
+      first_name: Camille
+      last_name: Martin
+      role: dirigeant
+      assistant: true
+    - id: lucas
+      email: lucas.bernard@atelier-demo.test
+      first_name: Lucas
+      last_name: Bernard
+      role: membre
+      assistant: true
 
 etransactions:
   enabled: true

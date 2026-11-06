@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Claude Code signs in with a Claude subscription or an API key, nothing else.
+# expect: models.claude_code_auth vaut subscription ou api_key
+models: { claude_code_auth: oauth }

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Identifiers name accounts and perso-<id> repositories: they are unique.
+# expect: chaque personne a un id et un email qui lui sont propres
+# expect: id déclarés : alex, alex
+users:
+  people:
+    - { id: alex, email: dirigeant@example.test, first_name: Alex, role: dirigeant }
+    - { id: alex, email: alex.autre@example.test, first_name: Alex, role: membre }

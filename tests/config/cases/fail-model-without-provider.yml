@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A model is written "<provider>/<model>".
+# expect: de la forme « fournisseur/modèle »
+models: { bureau: mistral-medium-latest }

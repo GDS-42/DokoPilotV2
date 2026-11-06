@@ -128,3 +128,9 @@ Décisions prises avec le porteur du projet le 2026-11-06 ; la spécification qu
 | D-26 | Deux familles de skills : `dokopilot-…` (fournies et mises à jour par DokoPilot, ignorées par Git) et celles de l'entreprise (versionnées, jamais écrasées) | Mettre à jour le produit sans toucher au savoir-faire de l'entreprise |
 | D-27 | L'import d'un contexte existant passe par la boîte de réception, trié et relu par un humain, jamais fusionné automatiquement | Un document importé peut contenir des instructions malveillantes |
 | D-28 | Le remplissage d'un dépôt de contexte n'a lieu que s'il est vide ; aucune mise à jour automatique d'un contexte existant en version 0.2 | Ne jamais écraser le travail de l'entreprise |
+
+## D-29 — Dans Dokos, seul l'assistant du dirigeant en version 0.2
+
+- **Contexte** : le rôle `Assistant IA` donne les mêmes droits de préparation à tout assistant, quels que soient les droits de la personne qu'il sert. L'assistant d'un membre pourrait donc préparer des factures d'achat même si ce membre n'a pas accès aux achats.
+- **Choix** : en version 0.2, seul l'assistant du dirigeant a un utilisateur dans Dokos. Les membres et leurs assistants ont leurs comptes dans Forgejo (contexte) ; le dirigeant crée dans Dokos les comptes de ses salariés avec les rôles qui conviennent. Le harnais d'un membre fonctionne sans serveur MCP Dokos.
+- **Revoir si** : on sait dériver les droits de l'assistant de ceux de la personne (droits de la personne ∩ périmètre de l'assistant).

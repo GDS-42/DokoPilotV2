@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A dirigeant and two members: assistant addresses are derived, the keys of version 0.1 too.
+# Only the dirigeant's assistant is a Dokos assistant (decision D-29): no "for: lucas@…".
+# expect-output: assistant_email: assistant\.lucas@example\.test
+# expect-output: for: dirigeant@example\.test
+# expect-no-output: for: lucas@example\.test
+# expect-output: email: assistant@example\.test
+# expect-output: ^ +dirigeant:$
+# expect-output: ^ +entrepreneur:$
+# expect-output: last_name: ''
+users:
+  people:
+    - { id: alex, email: dirigeant@example.test, first_name: Alex, last_name: Test, role: dirigeant, assistant_email: assistant@example.test }
+    - { id: lucas, email: lucas@example.test, first_name: Lucas, role: membre }
+    - { id: sam, email: sam@example.test, first_name: Sam, last_name: Sans Assistant, role: membre, assistant: false }
