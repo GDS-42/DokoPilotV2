@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Forgejo for the context repositories (C-2): Compose project, pinned image, SQLite, then
-# the administrator, the organisation dp.client.id, the repositories, one account per person
-# and per assistant, the teams, the collaborators, the tokens and the credential files.
+# the administrator, the organisation dp.client.id, the repositories and the protection of
+# their default branch, one account per person and per assistant, the teams, the
+# collaborators, the people's tokens and the credential files (D-30, D-32).
 # Every step is idempotent. Reads `dp` and `secrets` only.
 
 - name: Check the settings of Forgejo

@@ -54,6 +54,11 @@ services:
       # federation, no Actions, no package registry.
       FORGEJO__cron_0X2E_update_checker__ENABLED: "false"
       FORGEJO__repository__DISABLE_MIGRATIONS: "true"
+      # No mirror: a repository administrator could otherwise push-mirror the context to an
+      # outside address. [mirror] ENABLED = false disables pull and push mirrors alike
+      # (custom/conf/app.example.ini and modules/setting/mirror.go of Forgejo v17.0.1; the
+      # push mirror API then answers « Mirror feature is disabled », verified on 17.0.1).
+      FORGEJO__mirror__ENABLED: "false"
       FORGEJO__federation__ENABLED: "false"
       FORGEJO__actions__ENABLED: "false"
       FORGEJO__packages__ENABLED: "false"

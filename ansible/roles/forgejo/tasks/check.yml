@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Read-only checks of Forgejo (check.yml, tag `forgejo`), usable in production: Forgejo
 # answers, the C-2 settings (registration closed, sign-in required, offline, no mail, no
-# OAuth, no update checker), the organisation, the repositories and their content, the
-# teams and the collaborators, the credential files and their tokens, and the rights of
-# each account (it reads its repositories and none of the others: an assistant who is not
-# the dirigeant's does not read direction). Nothing is changed.
+# OAuth, no update checker, no mirror), the organisation, the repositories, their content
+# and the protection of their default branch, the teams and the collaborators, the
+# credential files (a person's token is accepted; an assistant holds no token at all), and
+# the rights of each account (it reads its repositories and none of the others: an
+# assistant who is not the dirigeant's does not read direction). Nothing is changed.
 
 - name: Describe the accounts and repositories to check
   ansible.builtin.include_tasks: model.yml

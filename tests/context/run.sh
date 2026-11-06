@@ -4,15 +4,21 @@
 # of image): runs ansible/playbooks/context.yml (roles config, forgejo, context) with
 # ansible_connection=local, in a test directory, a test Compose project and a free port,
 # with the demo client (two people: camille, dirigeant, and lucas, membre, each with an
-# assistant) and secrets generated for the run. Then proves with real API and Git calls:
-# accounts, organisation, teams, collaborators and repositories exist; each repository
-# received the templates once (one commit by « DokoPilot »); credential files are root 0600;
-# a second run changes nothing and adds no commit; check.yml (tag forgejo) passes;
-# assistant-lucas (membre) cannot read direction nor push to perso-camille, assistant-camille
-# clones direction; the copy and restore of the data volume documented in exploitation.md
-# work; a person removed from the configuration is disabled, loses access and their
-# credential files, their repository is kept; a third run changes nothing. Everything is
-# removed at the end except the Forgejo image (DOKOPILOT_TEST_KEEP=1 keeps it all).
+# assistant) and secrets generated for the run. First, without Docker, the unit checks of
+# test_provision.py (reserved or colliding account names refused before any change). Then
+# proves with real API and Git calls: accounts, organisation, teams, collaborators and
+# repositories exist; each repository received the templates once (one commit by
+# « DokoPilot ») and its default branch is protected; credential files are root 0600, a
+# person's holds a token, an assistant's holds none and Forgejo holds none for it; mirrors
+# are disabled; a second run changes nothing and adds no commit; check.yml (tag forgejo)
+# passes; assistant-lucas (membre) cannot read direction nor push to perso-camille,
+# assistant-camille clones direction; normal pushes work but a force push or the deletion
+# of main is refused, even to the administrator of a perso repository; the copy and restore
+# of the data volume documented in exploitation.md work; check.yml detects a removed or
+# weakened protection and an assistant token (left by an earlier version), and the next
+# run repairs them; a person removed from the configuration is disabled, loses access and
+# their credential files, their repository is kept; a third run changes nothing.
+# Everything is removed at the end except the Forgejo image (DOKOPILOT_TEST_KEEP=1 keeps it all).
 #
 # Environment: DOKOPILOT_TEST_PREFIX (default /opt/dokopilot-context-test),
 # DOKOPILOT_TEST_PORT (default: a free port), ANSIBLE_PLAYBOOK.
@@ -68,6 +74,21 @@ check() { # check <description> <command...>
 equals() { [[ "$1" == "$2" ]] || { echo "      attendu « $2 », obtenu « $1 »"; return 1; }; }
 contains() { grep -Fq -- "$2" <<<"$1" || { echo "      « $2 » absent"; return 1; }; }
 refused() { if "$@"; then echo "      accepté : $*"; return 1; fi; }
+quietly() { "$@" >/dev/null 2>&1; }
+rejected_with() { # rejected_with <expected message> <command...> : the command fails and prints the message
+  local expected="$1" output
+  shift
+  if output="$("$@" 2>&1)"; then echo "      accepté : $*"; return 1; fi
+  contains "$output" "$expected"
+}
+
+# --------------------------------------------------------------------------- 0. unit checks (no Docker)
+
+if (cd "$repo" && "$venv_python" -m unittest discover -s tests/context -p 'test_*.py') > "$work/unit.log" 2>&1; then
+  ok "noms de comptes réservés refusés avant toute modification, règle de protection ($(tail -n 3 "$work/unit.log" | grep -o 'Ran [0-9]* tests'))"
+else
+  fail "contrôles unitaires de forgejo_provision.py"; cat "$work/unit.log"
+fi
 
 # --------------------------------------------------------------------------- inputs
 
@@ -145,18 +166,29 @@ no_change() { # no_change <log name>
 api() { # api <path> : GET as the administrator, JSON on stdout
   curl -fsS -K "$work/admin.curl" -H 'Accept: application/json' "$base/api/v1$1"
 }
-status_as() { # status_as <account> <path> : HTTP status of a GET with the account's token
-  curl -sS -o /dev/null -w '%{http_code}' -H @<(jq -r '"Authorization: token \(.token)"' "$credentials/$1.json") "$base/api/v1$2"
+# A person authenticates with the token of their credential file (what the workstation
+# uses); an assistant, which holds no token, with its password (its file has no token).
+status_as() { # status_as <account> <path> : HTTP status of a GET as the account
+  curl -sS -o /dev/null -w '%{http_code}' -H @<(jq -r 'if .token then "Authorization: token \(.token)"
+    else "Authorization: Basic \("\(.user):\(.password)" | @base64)" end' "$credentials/$1.json") "$base/api/v1$2"
+}
+admin_send() { # admin_send <method> <path> <JSON body> [header] : « <HTTP status> <message> »; answer in $work/answer.json
+  local extra=()
+  if [[ -n "${4:-}" ]]; then extra=(-H "$4"); fi
+  curl -sS -K "$work/admin.curl" -H 'Accept: application/json' -H 'Content-Type: application/json' "${extra[@]}" \
+    -X "$1" --data "$3" -o "$work/answer.json" -w '%{http_code}' "$base/api/v1$2"
+  printf ' %s' "$(jq -r 'if type == "object" then .message // "" else "" end' "$work/answer.json" 2>/dev/null)"
 }
 commits() { api "/repos/$org/$1/commits?limit=50" | jq 'length'; }
 file_of() { # file_of <repo> <path> : raw content of a file of the default branch
   curl -fsS -K "$work/admin.curl" "$base/api/v1/repos/$org/$1/raw/$(jq -rn --arg v "$2" '$v|@uri')"
 }
-git_as() { # git_as <account> <git args...> : Git over HTTP with the token of the account (credential file)
+git_as() { # git_as <account> <git args...> : Git over HTTP as the account (token of a person, password of an assistant)
   local account="$1" store="$work/git-$1.credentials"
   shift
   if [[ ! -f "$store" ]]; then
-    jq -r --arg base "$base" '. as $c | $base | sub("://"; "://\($c.user):\($c.token)@")' "$credentials/$account.json" > "$store"
+    jq -r --arg base "$base" '. as $c | $base | sub("://"; "://\($c.user):\($c.token // $c.password)@")' \
+      "$credentials/$account.json" > "$store"
     chmod 600 "$store"
   fi
   git -c credential.helper= -c credential.helper="store --file=$store" -c user.name="Test $account" \
@@ -168,6 +200,16 @@ can_push() { # can_push <account> <clone directory>
   date +%s%N > "$dir/essai-$account.md"
   git -C "$dir" add . && git -C "$dir" -c user.name=t -c user.email=t@test.invalid commit -qm "Essai de $account" >/dev/null
   git_as "$account" -C "$dir" push -q origin HEAD:main >/dev/null 2>&1
+}
+force_push() { # force_push <account> <repo> : rewrites the last commit of main in a fresh clone, pushes with --force
+  local account="$1" dir="$work/clones/force-$1-$2"
+  rm -rf "$dir"
+  git_as "$account" clone -q "$base/$org/$2.git" "$dir" >/dev/null 2>&1 || { echo "clonage de $2 impossible"; return 1; }
+  git -C "$dir" -c user.name=t -c user.email=t@test.invalid commit -q --amend --allow-empty -m "Réécriture par $account" &&
+    git_as "$account" -C "$dir" push --force origin HEAD:main
+}
+delete_branch() { # delete_branch <account> <clone directory> <branch> : git push origin :<branch>
+  git_as "$1" -C "$2" push origin ":$3"
 }
 mkdir -p "$work/clones"
 
@@ -220,7 +262,18 @@ for name in entreprise direction perso-camille perso-lucas; do
   check "dépôt $name privé, non vide, branche main" equals "$(jq -r '[.private, .empty, .default_branch] | join(" ")' <<<"$info")" "true false main"
   check "dépôt $name : un seul commit, de « DokoPilot »" equals \
     "$(api "/repos/$org/$name/commits?limit=50" | jq -r 'map(.commit.author.name) | join(",")')" "DokoPilot"
+  # push enabled, no allowlist, no protected file, no administrator exemption (D-32)
+  check "dépôt $name : branche main protégée, poussée ouverte aux rédacteurs, aucun fichier protégé" equals \
+    "$(api "/repos/$org/$name/branch_protections" | jq -r 'map(select(.rule_name == "main"))
+       | map([.enable_push, .enable_push_whitelist, .protected_file_patterns == "", .apply_to_admins] | join(" ")) | join(",")')" \
+    "true false true true"
 done
+check "miroirs désactivés : pas de miroir poussé, même par l'administrateur du dépôt" equals \
+  "$(admin_send POST "/repos/$org/perso-lucas/push_mirrors" '{"remote_address":"https://example.com/copie.git","interval":"8h"}' 'Sudo: lucas')" \
+  "400 Mirror feature is disabled"
+check "app.ini : [mirror] ENABLED = false" equals \
+  "$(docker compose --project-directory "$prefix/forgejo" -f "$prefix/forgejo/compose.yaml" exec -T forgejo \
+       sed -n '/^\[mirror\]/,/^\[/p' /var/lib/gitea/custom/conf/app.ini | grep -c '^ENABLED *= *false$')" 1
 
 tree="$(api "/repos/$org/entreprise/git/trees/main?recursive=true&per_page=1000" | jq -r '.tree[] | select(.type == "blob") | .path')"
 for path in AGENTS.md CLAUDE.md .gitignore README.md entreprise.md 00-Boite-de-reception/README.md 10-Sources/README.md \
@@ -259,14 +312,21 @@ check "perso : boîte de réception et projets" equals \
   "$(api "/repos/$org/perso-lucas/git/trees/main?recursive=true" | jq -r '.tree[].path' | grep -cE '^(00-Boite-de-reception|40-Projets)/README\.md$')" 2
 
 check "dossier des identifiants en 0700 root" equals "$(stat -c '%a %U' "$credentials")" "700 root"
-for account in camille lucas assistant-camille assistant-lucas; do
+for account in camille lucas; do
   file="$credentials/$account.json"
   check "identifiants de $account : 0600 root, user, password, token" equals \
     "$(stat -c '%a %U' "$file") $(jq -r '[.user, (.password | length > 12), (.token | length == 40)] | join(" ")' "$file")" \
     "600 root $account true true"
 done
-check "jeton : écriture des dépôts seulement, limité aux dépôts du compte" equals \
-  "$(api /users/assistant-lucas/tokens | jq -r '.[] | select(.name == "dokopilot") | [(.scopes | join(",")), (.repositories | map(.name) | sort | join(","))] | join(" ")')" \
+for account in assistant-camille assistant-lucas; do
+  file="$credentials/$account.json"
+  check "identifiants de $account : 0600 root, user, password, sans jeton" equals \
+    "$(stat -c '%a %U' "$file") $(jq -r '[.user, (.password | length > 12), has("token")] | join(" ")' "$file")" \
+    "600 root $account true false"
+  check "$account ne détient aucun jeton dans Forgejo" equals "$(api "/users/$account/tokens" | jq 'length')" 0
+done
+check "jeton de lucas : écriture des dépôts seulement, limité à ses dépôts" equals \
+  "$(api /users/lucas/tokens | jq -r '.[] | select(.name == "dokopilot") | [(.scopes | join(",")), (.repositories | map(.name) | sort | join(","))] | join(" ")')" \
   "write:repository entreprise,perso-lucas"
 check "jeton du compte de la dirigeante : entreprise, direction, perso-camille" equals \
   "$(api /users/camille/tokens | jq -r '.[] | select(.name == "dokopilot") | .repositories | map(.name) | sort | join(",")')" \
@@ -294,7 +354,7 @@ check "contrôles Forgejo conformes" contains "$(cat "$work/check.log")" "Résul
 check "assistant-camille clone direction" can_clone assistant-camille direction
 check "assistant-camille pousse dans direction" can_push assistant-camille "$work/clones/assistant-camille-direction"
 check "assistant-lucas (membre) ne lit pas direction (Git)" refused can_clone assistant-lucas direction
-check "assistant-lucas ne lit pas direction (API, avec son jeton)" equals "$(status_as assistant-lucas "/repos/$org/direction")" 404
+check "assistant-lucas ne lit pas direction (API)" equals "$(status_as assistant-lucas "/repos/$org/direction")" 404
 check "assistant-lucas clone entreprise" can_clone assistant-lucas entreprise
 check "assistant-lucas pousse dans entreprise" can_push assistant-lucas "$work/clones/assistant-lucas-entreprise"
 check "assistant-camille clone perso-camille" can_clone assistant-camille perso-camille
@@ -304,6 +364,35 @@ check "lucas clone perso-lucas" can_clone lucas perso-lucas
 check "lucas pousse dans perso-lucas" can_push lucas "$work/clones/lucas-perso-lucas"
 check "lucas ne lit pas direction" equals "$(status_as lucas "/repos/$org/direction")" 404
 check "camille clone direction" can_clone camille direction
+
+# Protected default branch (D-32): normal pushes pass, rewriting or deleting main does not,
+# whoever asks (a team writer, an assistant, the administrator of a perso repository).
+# (Nothing new is pushed to entreprise here: the clone of assistant-lucas pushes there again below.)
+check "camille clone perso-camille" can_clone camille perso-camille
+check "camille pousse dans perso-camille (branche main protégée)" can_push camille "$work/clones/camille-perso-camille"
+check "camille ne réécrit pas main d'entreprise (git push --force)" \
+  rejected_with "branch main is protected from force push" force_push camille entreprise
+check "assistant-camille ne réécrit pas main de direction" \
+  rejected_with "branch main is protected from force push" force_push assistant-camille direction
+check "lucas, administrateur de perso-lucas, ne réécrit pas main" \
+  rejected_with "branch main is protected from force push" force_push lucas perso-lucas
+check "lucas ne supprime pas main de perso-lucas (git push origin :main)" \
+  rejected_with "pre-receive hook declined" delete_branch lucas "$work/clones/lucas-perso-lucas" main
+check "lucas ne supprime pas main par l'API (avec son jeton)" contains \
+  "$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H @<(jq -r '"Authorization: token \(.token)"' "$credentials/lucas.json") \
+     "$base/api/v1/repos/$org/perso-lucas/branches/main")" 403
+check "le jeton de lucas ne retire pas la protection (droits d'administration exigés)" contains \
+  "$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H @<(jq -r '"Authorization: token \(.token)"' "$credentials/lucas.json") \
+     "$base/api/v1/repos/$org/perso-lucas/branch_protections/main")" 403
+# Forgejo already refuses deleting the default branch; the protection also covers main once
+# another branch has become the default one (possible for the administrator of the repository).
+check "lucas pousse une autre branche dans perso-lucas" \
+  quietly git_as lucas -C "$work/clones/lucas-perso-lucas" push -q origin HEAD:essai
+check "branche par défaut de perso-lucas : essai" contains "$(admin_send PATCH "/repos/$org/perso-lucas" '{"default_branch":"essai"}')" 200
+check "main, devenue une branche ordinaire, reste protégée contre la suppression" \
+  rejected_with "branch main is protected from deletion" delete_branch lucas "$work/clones/lucas-perso-lucas" main
+check "branche par défaut de perso-lucas : main de nouveau" contains "$(admin_send PATCH "/repos/$org/perso-lucas" '{"default_branch":"main"}')" 200
+check "une branche non protégée se supprime normalement" quietly delete_branch lucas "$work/clones/lucas-perso-lucas" essai
 
 # --------------------------------------------------------------------------- 4. copy and restore of the data volume
 
@@ -322,11 +411,44 @@ fcompose run --rm --no-deps -T -v "$work/forgejo-data.tar:/backup/forgejo-data.t
 fcompose start forgejo >/dev/null 2>&1
 until curl -fsS "$base/api/healthz" >/dev/null 2>&1; do sleep 1; done
 check "restauration : le dépôt revient à l'état de la copie" equals "$(commits entreprise)" "$before"
-check "restauration : les jetons restent valables" equals "$(status_as assistant-camille "/repos/$org/direction")" 200
+check "restauration : les jetons restent valables" equals "$(status_as camille "/repos/$org/direction")" 200
 
-# --------------------------------------------------------------------------- 5. a person removed
+# --------------------------------------------------------------------------- 5. drift detected and repaired
+
+# A protection removed, another weakened (in the web interface, an administrator of the
+# repository could do it), and an assistant token with its old-format credential file, as an
+# earlier version left them: check.yml reports each one, the next run repairs them.
+check "protection d'entreprise retirée (simulation)" contains "$(admin_send DELETE "/repos/$org/entreprise/branch_protections/main" '{}')" 204
+check "protection de perso-camille affaiblie (simulation)" contains \
+  "$(admin_send PATCH "/repos/$org/perso-camille/branch_protections/main" '{"enable_push":false}')" 200
+check "ancien jeton de assistant-camille (simulation)" contains \
+  "$(admin_send POST /users/assistant-camille/tokens "{\"name\":\"dokopilot\",\"scopes\":[\"write:repository\"],\"repositories\":[{\"owner\":\"$org\",\"name\":\"entreprise\"}]}")" 201
+jq --slurpfile answer "$work/answer.json" '. + {token: $answer[0].sha1}' "$credentials/assistant-camille.json" > "$work/old-format.json"
+install -m 600 -o root -g root "$work/old-format.json" "$credentials/assistant-camille.json"
+rm -f "$work/old-format.json" "$work/answer.json"
+if playbook drift "$work/client.yml" check.yml --tags forgejo; then
+  fail "check.yml --tags forgejo aurait dû échouer (protections et jeton d'assistant)"
+else
+  drift="$(tr -s ' \n' ' ' < "$work/drift.log")"
+  check "contrôle : protection retirée signalée" contains "$drift" "branche main de $org/entreprise non protégée"
+  check "contrôle : protection affaiblie signalée" contains "$drift" "protection de la branche main de $org/perso-camille modifiée (enable_push)"
+  check "contrôle : jeton d'assistant signalé" contains "$drift" "assistant-camille détient des jetons (dokopilot)"
+  check "contrôle : fichier d'assistant avec jeton signalé" contains "$drift" "assistant-camille.json contient un jeton"
+fi
+
+# --------------------------------------------------------------------------- 6. a person removed
 
 if playbook removed "$work/client-removed.yml" context.yml; then ok "context.yml sans lucas : $(recap removed)"; else fail "context.yml sans lucas"; show_failure removed; fi
+for name in entreprise perso-camille; do
+  check "protection de main rétablie : $name" equals \
+    "$(api "/repos/$org/$name/branch_protections" | jq -r 'map(select(.rule_name == "main"))
+       | map([.enable_push, .enable_push_whitelist, .protected_file_patterns == "", .apply_to_admins] | join(" ")) | join(",")')" \
+    "true false true true"
+done
+check "ancien jeton de assistant-camille supprimé" equals "$(api /users/assistant-camille/tokens | jq 'length')" 0
+check "fichier de assistant-camille réécrit sans jeton, mot de passe gardé" equals \
+  "$(jq -r '[.user, has("token"), (.password | length > 12)] | join(" ")' "$credentials/assistant-camille.json")" "assistant-camille false true"
+check "assistant-camille pousse encore dans direction (mot de passe gardé)" can_push assistant-camille "$work/clones/assistant-camille-direction"
 for account in lucas assistant-lucas; do
   check "compte $account désactivé" equals "$(api "/users/$account" | jq -r .prohibit_login)" true
   check "identifiants de $account supprimés" test ! -e "$credentials/$account.json"

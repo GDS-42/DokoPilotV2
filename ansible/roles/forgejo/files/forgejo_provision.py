@@ -4,18 +4,25 @@
 
     forgejo_provision.py <step>        the payload is a JSON object on stdin
 
-Steps (C-2 and C-3 of docs/plan-v0.2.md):
-  ensure  administrator, organisation, repositories, accounts, teams, collaborators,
-          tokens and credential files; disables the accounts that are no longer configured
-          and deletes their credential files (repositories are never deleted).
+Steps (C-2 and C-3 of docs/plan-v0.2.md, D-30 and D-32 of docs/decisions.md):
+  ensure  administrator, organisation, repositories and the protection of their default
+          branch, accounts, teams, collaborators, the people's tokens and the credential
+          files; disables the accounts that are no longer configured and deletes their
+          credential files (repositories are never deleted).
   fill    pushes the rendered context as the first commit of each EMPTY repository; a
           repository that already has a commit is never touched.
   check   read-only checks for check.yml.
 
+The ensure and check steps first refuse, before any call to Forgejo, an account name that
+Forgejo reserves or that collides with the administrator, the organisation or the
+assistants (check_logins).
+
 The payload holds the administrator's password: it arrives on stdin, never on a command
 line. The output is one JSON object, {"changed": ..., ...} or {"failed": true, "msg": ...}
 with a French message; it never contains a password or a token. Credential files are
-written here, root only: <credentials_dir>/<account>.json = {"user", "password", "token"}.
+written here, root only: <credentials_dir>/<person>.json = {"user", "password", "token"}
+(the token is what the person's workstation uses) and <credentials_dir>/<assistant>.json =
+{"user", "password"} (an assistant holds no token: nothing uses one, D-32).
 Standard library only.
 """
 
@@ -41,6 +48,38 @@ from typing import Any
 
 PAGE = 50
 TIMEOUT = 30
+
+# User names that Forgejo 17.0.1 reserves: reservedUsernames and reservedUserPatterns of
+# models/user/user.go at tag v17.0.1, compared in lower case as models/db/name.go
+# (IsUsableName) does. Each name was checked against the admin API of 17.0.1 (« name is
+# reserved », HTTP 422). Update this list with the image (docs/exploitation.md).
+RESERVED_USER_NAMES = frozenset({
+    ".", "..", "-", ".well-known", "api", "metrics", "v2", "assets", "attachments", "avatar",
+    "avatars", "repo-avatars", "captcha", "login", "org", "repo", "user", "admin", "explore",
+    "issues", "pulls", "milestones", "notifications", "report_abuse", "favicon.ico",
+    "manifest.json", "robots.txt", "sitemap.xml", "ssh_info", "swagger.v1.json", "ghost",
+    "gitea-actions", "forgejo-actions", "actor",
+})
+RESERVED_USER_SUFFIXES = (".keys", ".gpg", ".rss", ".atom", ".png")
+# Characters Forgejo accepts in a user name (modules/validation/helpers.go of v17.0.1,
+# IsValidUsername, dots allowed by default): no double nor final « - », « . » or « _ ».
+VALID_USER_NAME = re.compile(r"^[0-9A-Za-z][-.\w]*$", re.ASCII)
+INVALID_USER_NAME = re.compile(r"[-._]{2,}|[-._]$")
+
+# Protection of the default branch of every context repository (D-32). Forgejo refuses a
+# force push and the deletion of a protected branch to everyone, administrators included,
+# before any other rule (routers/private/hook_pre_receive.go of v17.0.1, « enforce
+# absolutely »). Pushing stays open to everyone who can write (enable_push without an
+# allowlist). No protected file pattern: it would also block the dirigeant's own edits of
+# AGENTS.md (D-32). Fields of CreateBranchProtectionOption and EditBranchProtectionOption,
+# /api/swagger of 17.0.1.
+PROTECTION = {
+    "enable_push": True,
+    "enable_push_whitelist": False,
+    "require_signed_commits": False,
+    "protected_file_patterns": "",
+    "apply_to_admins": True,
+}
 
 
 class Failure(Exception):
@@ -202,11 +241,41 @@ def complete(payload: dict[str, Any]) -> dict[str, Any]:
     for person in people:
         name = f"{person.get('first_name', '')} {person.get('last_name', '')}".strip() or person["id"]
         repos.append({"name": f"perso-{person['id']}", "description": descriptions["perso"].format(name=name)})
-    users = [account["user"] for account in accounts]
+    users = [account["user"].lower() for account in accounts]
     duplicates = sorted({user for user in users if users.count(user) > 1})
     if duplicates:
         raise Failure(f"comptes Forgejo en double : {', '.join(duplicates)}")
+    check_logins(payload, accounts)
     return {**payload, "accounts": accounts, "repos": repos, "teams": teams, "collaborators": collaborators}
+
+
+def check_logins(payload: dict[str, Any], accounts: list[dict[str, Any]]) -> None:
+    """Refuses, before any change, a login Forgejo would refuse or that would collide.
+
+    The config role refuses these person ids already; this is the last line of defence,
+    with the reserved names of the running version (RESERVED_USER_NAMES).
+    """
+    admin = payload["admin"]["user"].lower()
+    org = payload["org"]["name"].lower()
+    prefix = payload["settings"]["assistant_prefix"].lower()
+    problems = []
+    for account in accounts:
+        login = account["user"]
+        lower = login.lower()
+        if lower == admin:
+            problems.append(f"« {login} » est le compte d'administration de Forgejo")
+        elif lower == org:
+            problems.append(f"« {login} » est le nom de l'organisation (l'identifiant du client)")
+        elif account["kind"] == "person" and prefix and lower.startswith(prefix):
+            problems.append(f"« {login} » commence par « {prefix} », réservé aux comptes des assistants")
+        elif lower in RESERVED_USER_NAMES or lower.endswith(RESERVED_USER_SUFFIXES):
+            problems.append(f"« {login} » est un nom réservé par Forgejo")
+        elif not VALID_USER_NAME.match(login) or INVALID_USER_NAME.search(login):
+            problems.append(f"« {login} » contient des caractères refusés par Forgejo "
+                            "(lettres, chiffres et tirets, sans tiret double ni final)")
+    if problems:
+        raise Failure("identifiants refusés, Forgejo n'a pas été modifié : " + " ; ".join(problems)
+                      + ". Choisissez un autre id dans users.people (client.yml).")
 
 
 # ----------------------------------------------------------------------------- ensure
@@ -274,14 +343,35 @@ def ensure_repos(payload: dict[str, Any], api: Api, run: Run) -> None:
             run.note(f"dépôt {org}/{repo['name']} rendu privé")
 
 
+def protection_differences(current: dict[str, Any]) -> list[str]:
+    return [key for key, value in PROTECTION.items() if current.get(key) != value]
+
+
+def ensure_protections(payload: dict[str, Any], api: Api, run: Run) -> None:
+    """The default branch of every context repository is protected (D-32).
+
+    The rule may exist before the branch: it is created on the empty repository, before the
+    first commit of the context role (which pushes normally, as the administrator).
+    """
+    org = payload["org"]["name"]
+    branch = payload["default_branch"]
+    for repo in payload["repos"]:
+        base = f"/repos/{quote(org)}/{quote(repo['name'])}/branch_protections"
+        current = api.get(f"{base}/{quote(branch)}", missing_ok=True)
+        if current is None:
+            api.call("POST", base, body={"rule_name": branch, **PROTECTION})
+            run.note(f"branche {branch} de {repo['name']} protégée (ni réécriture ni suppression)")
+        elif differences := protection_differences(current):
+            api.call("PATCH", f"{base}/{quote(branch)}", body=PROTECTION)
+            run.note(f"protection de la branche {branch} de {repo['name']} rétablie ({', '.join(differences)})")
+
+
 def ensure_accounts(payload: dict[str, Any], api: Api, run: Run) -> dict[str, str]:
     """Creates or updates the configured accounts; returns the passwords of the new ones."""
     created: dict[str, str] = {}
-    org = payload["org"]["name"]
     for account in payload["accounts"]:
         user = account["user"]
-        if user == org:
-            raise Failure(f"le compte {user} porte le nom de l'organisation : changez l'identifiant de la personne")
+        # Names colliding with the organisation were refused by check_logins, before any change.
         current = api.get(f"/users/{quote(user)}", missing_ok=True)
         if current is None:
             password = random_password(payload["password_length"])
@@ -362,11 +452,13 @@ def account_repos(payload: dict[str, Any], user: str) -> list[str]:
     return sorted(names)
 
 
-def write_credentials(directory: Path, user: str, password: str, token: str) -> None:
+def write_credentials(directory: Path, user: str, password: str, token: str | None) -> None:
+    """Writes <directory>/<user>.json, root 0600; without a token (assistant), no "token" key."""
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chown(directory, 0, 0)
     os.chmod(directory, 0o700)
-    content = json.dumps({"user": user, "password": password, "token": token}, indent=2) + "\n"
+    values = {"user": user, "password": password} | ({} if token is None else {"token": token})
+    content = json.dumps(values, indent=2) + "\n"
     handle, temporary = tempfile.mkstemp(dir=directory, prefix=f".{user}.", suffix=".tmp")
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
@@ -379,8 +471,34 @@ def write_credentials(directory: Path, user: str, password: str, token: str) -> 
         raise
 
 
+def read_credentials(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return None
+    return stored if isinstance(stored, dict) else None
+
+
+def new_initial_password(payload: dict[str, Any], api: Api, account: dict[str, Any]) -> str:
+    """The account existed but its credential file is gone: a new initial password."""
+    password = random_password(payload["password_length"])
+    api.call("PATCH", f"/admin/users/{quote(account['user'])}", body={
+        "login_name": account["user"], "source_id": 0, "password": password,
+        "must_change_password": account["must_change_password"]})
+    return password
+
+
 def ensure_credentials(payload: dict[str, Any], api: Api, run: Run, created: dict[str, str]) -> None:
-    """One credential file per account, created when absent; the token follows the repositories."""
+    """One credential file per account, created when absent.
+
+    A person's file holds a token, limited to the person's repositories and replaced when
+    they change: the workstation clones and pushes with it (C-4). An assistant's file holds
+    its password only: nothing uses an assistant token (the workstation reads the person's
+    file only, ansible/roles/harness/tasks/server.yml), so none is minted and the tokens
+    named payload["token"]["name"] left by earlier versions are deleted (D-32).
+    """
     org = payload["org"]["name"]
     directory = Path(payload["credentials_dir"])
     spec = payload["token"]
@@ -391,14 +509,25 @@ def ensure_credentials(payload: dict[str, Any], api: Api, run: Run, created: dic
             # A token without repositories would not be limited at all.
             raise Failure(f"le compte {user} n'a accès à aucun dépôt : configuration incohérente")
         path = directory / f"{user}.json"
-        stored: dict[str, Any] | None = None
-        if path.exists():
-            try:
-                stored = json.loads(path.read_text(encoding="utf-8"))
-            except ValueError:
-                stored = None
+        stored = read_credentials(path)
         tokens = {token["name"]: token for token in api.paged(f"/users/{quote(user)}/tokens")}
         current = tokens.get(spec["name"])
+        if account["kind"] == "assistant":
+            if current:
+                api.call("DELETE", f"/users/{quote(user)}/tokens/{current['id']}", ok=(204, 404))
+                run.note(f"{user} : jeton « {spec['name']} » supprimé (un assistant n'en détient pas)")
+            if stored and stored.get("password") and stored.get("user") == user and "token" not in stored:
+                continue
+            if stored and stored.get("password"):
+                password, reason = stored["password"], "fichier d'identifiants réécrit sans jeton"
+            elif user in created:
+                password, reason = created[user], "identifiants créés (mot de passe, sans jeton)"
+            else:
+                password = new_initial_password(payload, api, account)
+                reason = "nouveau mot de passe initial (fichier d'identifiants absent)"
+            write_credentials(directory, user, password, None)
+            run.note(f"{user} : {reason}")
+            continue
         if stored and stored.get("token") and stored.get("password") and current:
             token_repos = sorted(repo["name"] for repo in current.get("repositories") or [])
             if (current.get("token_last_eight") == stored["token"][-8:] and token_repos == repos
@@ -411,11 +540,7 @@ def ensure_credentials(payload: dict[str, Any], api: Api, run: Run, created: dic
             password = created[user]
             reason = "identifiants créés"
         else:
-            # The account existed but its credential file is gone: new initial password.
-            password = random_password(payload["password_length"])
-            api.call("PATCH", f"/admin/users/{quote(user)}", body={
-                "login_name": user, "source_id": 0, "password": password,
-                "must_change_password": account["must_change_password"]})
+            password = new_initial_password(payload, api, account)
             reason = "nouveau mot de passe initial et nouveau jeton (fichier d'identifiants absent)"
         if current:
             api.call("DELETE", f"/users/{quote(user)}/tokens/{current['id']}", ok=(204, 404))
@@ -456,6 +581,7 @@ def step_ensure(payload: dict[str, Any]) -> dict[str, Any]:
     ensure_admin(payload, api, run)
     ensure_org(payload, api, run)
     ensure_repos(payload, api, run)
+    ensure_protections(payload, api, run)
     created = ensure_accounts(payload, api, run)
     removed = ensure_teams(payload, api, run)
     ensure_collaborators(payload, api, run)
@@ -534,6 +660,7 @@ def step_check(payload: dict[str, Any]) -> dict[str, Any]:
         ("mailer", "ENABLED", "false", "aucun courriel"),
         ("oauth2", "ENABLED", "false", "OAuth désactivé"),
         ("cron.update_checker", "ENABLED", "false", "pas de recherche de mises à jour (télémétrie)"),
+        ("mirror", "ENABLED", "false", "miroirs désactivés (aucune copie poussée vers l'extérieur)"),
     ]:
         value = ini.get(section, key, fallback="").strip().lower()
         if value != wanted:
@@ -552,14 +679,23 @@ def step_check(payload: dict[str, Any]) -> dict[str, Any]:
     if current_org.get("visibility") != "private":
         problems.append(f"organisation {org} non privée")
     repo_names = [repo["name"] for repo in payload["repos"]]
+    branch = payload["default_branch"]
     for repo in repo_names:
         current = api.get(f"/repos/{quote(org)}/{quote(repo)}", missing_ok=True)
         if current is None:
             problems.append(f"dépôt {org}/{repo} absent")
-        elif not current.get("private"):
+            continue
+        if not current.get("private"):
             problems.append(f"dépôt {org}/{repo} non privé")
         elif current.get("empty"):
             problems.append(f"dépôt {org}/{repo} vide (contexte non déposé)")
+        protection = api.get(f"/repos/{quote(org)}/{quote(repo)}/branch_protections/{quote(branch)}", missing_ok=True)
+        if protection is None:
+            problems.append(f"branche {branch} de {org}/{repo} non protégée (réécriture et suppression possibles) : "
+                            "relancez l'installation")
+        elif differences := protection_differences(protection):
+            problems.append(f"protection de la branche {branch} de {org}/{repo} modifiée ({', '.join(differences)}) : "
+                            "relancez l'installation")
     summary["repos"] = repo_names
 
     teams = {team["name"]: team for team in api.paged(f"/orgs/{quote(org)}/teams")}
@@ -595,18 +731,29 @@ def step_check(payload: dict[str, Any]) -> dict[str, Any]:
         info = path.stat()
         if stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != 0:
             problems.append(f"{path} doit appartenir à root, en 0600")
-        try:
-            stored = json.loads(path.read_text(encoding="utf-8"))
-        except ValueError:
+        stored = read_credentials(path)
+        if stored is None:
             problems.append(f"{path} illisible")
             continue
-        if not all(stored.get(key) for key in ("user", "password", "token")) or stored["user"] != user:
+        repos = account_repos(payload, user)
+        if account["kind"] == "assistant":
+            # An assistant holds no token (D-32): none in its file, none in Forgejo.
+            if not stored.get("password") or stored.get("user") != user:
+                problems.append(f"{path} incomplet (user, password)")
+            if "token" in stored:
+                problems.append(f"{path} contient un jeton, alors qu'un assistant n'en détient pas : relancez l'installation")
+            held = sorted(token["name"] for token in api.paged(f"/users/{quote(user)}/tokens"))
+            if held:
+                problems.append(f"{user} détient des jetons ({', '.join(held)}), alors qu'un assistant n'en détient aucun : "
+                                f"relancez l'installation (jeton « {payload['token']['name']} ») ou supprimez les autres")
+        elif not all(stored.get(key) for key in ("user", "password", "token")) or stored["user"] != user:
             problems.append(f"{path} incomplet (user, password, token)")
             continue
-        repos = account_repos(payload, user)
-        status, _ = api.call("GET", f"/repos/{quote(org)}/{quote(repos[0])}", ok=(200, 401, 403, 404), token=stored["token"])
-        if status != 200:
-            problems.append(f"jeton de {user} refusé ({status}) : supprimez {path} puis relancez l'installation")
+        else:
+            status, _ = api.call("GET", f"/repos/{quote(org)}/{quote(repos[0])}", ok=(200, 401, 403, 404),
+                                 token=stored["token"])
+            if status != 200:
+                problems.append(f"jeton de {user} refusé ({status}) : supprimez {path} puis relancez l'installation")
         # Rights of the account itself (the administrator acts as the account): it reads its
         # repositories and none of the others, whatever its token allows.
         for repo in repo_names:
