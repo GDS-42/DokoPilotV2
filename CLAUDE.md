@@ -16,6 +16,7 @@ Read [`docs/architecture.md`](docs/architecture.md) and [`docs/decisions.md`](do
 8. **Free licences only** (AGPL-3.0-or-later for our files, with an SPDX header; dependencies under OSI licences). No Vagrant (BSL), no non-free images.
 9. **French product, English code.** Documentation, configuration comments, messages shown to the integrator or the entrepreneur, and business skills are in French. Code, identifiers, code comments and commit messages are in English.
 10. **No agent merges into `main`.** Work on a branch, open a pull request; the project owner merges.
+11. **The project owner is the author.** Commits are authored with the owner's Git identity (GDS-42); an agent never sets a Git identity of its own and only adds its `Co-Authored-By` trailer.
 
 ## Repository map
 
