@@ -43,7 +43,7 @@ PLAYBOOKS = ANSIBLE_DIR / "playbooks"
 DEFAULT_IDENTITY = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "dokopilot" / "age-identity.txt"
 SECRET_PLACEHOLDER = "generate"
 # Same rule as dokopilot_person_id_regex in the config role.
-PERSON_ID = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
+PERSON_ID = re.compile(r"^(?=.{2,31}$)[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 # Clones synchronised by `sync`, relative to the workspace: (name shown, sub-folder).
 WORKSPACE_REPOSITORIES = (("entreprise", ""), ("direction", "direction"), ("perso", "perso"))
 
@@ -386,7 +386,9 @@ def ansible_playbook(client: str, playbook: str, args: argparse.Namespace, *, bo
         # Tests only: extra role variables (proxy and CA of a test sandbox, small swap), never
         # client settings. Client files cannot carry them: unknown top-level keys are refused.
         if os.environ.get("DOKOPILOT_TEST_EXTRA_VARS"):
-            cmd += ["-e", f"@{Path(os.environ['DOKOPILOT_TEST_EXTRA_VARS']).expanduser()}"]
+            extra_vars = Path(os.environ["DOKOPILOT_TEST_EXTRA_VARS"]).expanduser()
+            print(f"Attention : variables de test ajoutées depuis {extra_vars} (DOKOPILOT_TEST_EXTRA_VARS).", file=sys.stderr)
+            cmd += ["-e", f"@{extra_vars}"]
         if args.check:
             cmd.append("--check")
         if args.ask_become_pass:
@@ -551,8 +553,9 @@ def credential_hosts(credentials: Path) -> set[str]:
 
 def check_clone(label: str, repo: Path, client: str, credentials: Path) -> None:
     """Refuses a clone whose Git settings an agent could have changed: unexpected keys (a
-    program to run, another push address), another credential helper, or a remote that is
-    not the Forgejo of the credential file. Nothing is sent before these checks."""
+    program to run, another push address, a branch following another remote, a .git that
+    points elsewhere: the harness helper's audit), another credential helper, or a remote
+    that is not the Forgejo of the credential file. Nothing is sent before these checks."""
     module = workspace_git_module()
     advice = f"Vérifiez {repo}/.git/config, puis relancez « bin/dokopilot harness {client} » (il remet les réglages attendus)."
     try:
@@ -613,8 +616,25 @@ def conflict_message(label: str, repo: Path, files: list[str], client: str) -> s
     )
 
 
-def sync_repository(label: str, repo: Path, client: str, env: dict[str, str], credentials: Path) -> str:
-    """git pull --rebase then git push in one clone; returns the summary line, raises at the first problem."""
+# Files that steer the agents (rules, Claude Code settings, company skills, what Git ignores):
+# a change received from the server is shown and accepted by the person before it is taken.
+RULE_PATHS = ("AGENTS.md", "CLAUDE.md", ".agents", ".claude", ".opencode", "opencode.json", ".mcp.json", ".gitignore")
+
+
+def ask_yes(question: str) -> bool:
+    """A typed « oui » from the person; no answer (end of input) is no."""
+    try:
+        answer = input(f"{question} (o/N) ")
+    except EOFError:
+        print()
+        return False
+    return answer.strip().lower() in {"o", "oui", "y", "yes"}
+
+
+def sync_repository(label: str, repo: Path, client: str, env: dict[str, str], credentials: Path, assume_yes: bool) -> str:
+    """Fetch, rebase, show what would be sent, push, in one clone. Returns the summary line;
+    raises at the first problem. Rules received from the server are always shown and asked
+    (even with --yes); the commits to send are shown and asked unless --yes."""
     check_clone(label, repo, client, credentials)
     if rebase_in_progress(repo, env) or git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env):
         raise CliError(conflict_message(label, repo, git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env), client))
@@ -628,24 +648,51 @@ def sync_repository(label: str, repo: Path, client: str, env: dict[str, str], cr
         )
     untracked = git_lines(repo, "status", "--porcelain", "--untracked-files=all", env=env)
     head_before = (git_lines(repo, "rev-parse", "--verify", "-q", "HEAD", env=env) or [""])[0]
-    pull = git(repo, "pull", "--rebase", env=env, credentials=credentials)
-    if pull.returncode != 0:
+    if not head_before:
+        raise CliError(f"« {label} » ({repo}) : la copie est encore vide ; relancez « bin/dokopilot harness {client} », qui la remplit.")
+    fetch = git(repo, "fetch", "--quiet", "origin", env=env, credentials=credentials)
+    if fetch.returncode != 0 or not git_lines(repo, "rev-parse", "--verify", "-q", "@{u}", env=env):
+        raise CliError(
+            f"« {label} » ({repo}) : la récupération des changements du serveur a échoué (réseau, identifiants ou "
+            f"copie sans branche suivie) ; rien n'a été envoyé.\n{git_failure(fetch)}"
+        )
+    rules = git_lines(repo, "diff", "--name-only", "HEAD...@{u}", "--", *RULE_PATHS, env=env)
+    if rules:
+        print(f"\n« {label} » : les règles des agents ont changé sur le serveur ({', '.join(rules[:10])}"
+              f"{' …' if len(rules) > 10 else ''}) :")
+        for line in git_lines(repo, "log", "--format=  %h %an, %ad : %s", "--date=short", "HEAD..@{u}", "--", *RULE_PATHS, env=env):
+            print(line)
+        print(f"  Détail : git -C {repo} diff HEAD...@{{u}} -- {' '.join(RULE_PATHS)}")
+        if not ask_yes("  Ces règles s'appliqueront à vos agents. Les accepter ?"):
+            raise CliError(
+                f"« {label} » : règles refusées ; rien n'a été reçu ni envoyé pour ce dépôt, et la synchronisation "
+                "s'arrête ici. Voyez avec la personne qui les a changées, puis relancez."
+            )
+    rebase = git(repo, "rebase", "--quiet", env=env)
+    if rebase.returncode != 0:
         conflicts = git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env)
         if conflicts or rebase_in_progress(repo, env):
             raise CliError(conflict_message(label, repo, conflicts, client))
-        raise CliError(
-            f"« {label} » ({repo}) : la récupération des changements du serveur a échoué (réseau, identifiants ou "
-            f"copie sans branche suivie) ; rien n'a été envoyé.\n{git_failure(pull)}"
-        )
-    received = git_count(repo, f"{head_before}..@{{u}}" if head_before else "@{u}", env)
+        raise CliError(f"« {label} » ({repo}) : la mise à jour depuis le serveur a échoué ; rien n'a été envoyé.\n{git_failure(rebase)}")
+    received = git_count(repo, f"{head_before}..@{{u}}", env)
     to_send = git_count(repo, "@{u}..HEAD", env)
-    push = git(repo, "push", env=env, credentials=credentials)
-    if push.returncode != 0:
-        raise CliError(
-            f"« {label} » ({repo}) : l'envoi au serveur a été refusé ; si quelqu'un vient d'envoyer des changements, "
-            f"relancez « bin/dokopilot sync {client} ».\n{git_failure(push)}"
-        )
-    parts = [f"{received} changement(s) reçu(s)" if received else "", f"{to_send} envoyé(s)" if to_send else ""]
+    parts = [f"{received} changement(s) reçu(s)" if received else ""]
+    if to_send:
+        print(f"\n« {label} » : {to_send} enregistrement(s) à envoyer vers Forgejo, lisibles par tous ceux qui ont accès à ce dépôt :")
+        for line in git_lines(repo, "log", "--stat=100", "--format=%h %an, %ad : %s", "--date=short", "@{u}..HEAD", env=env):
+            if line.strip():
+                print(f"  {line}")
+        if not assume_yes and not ask_yes(f"  Envoyer ces {to_send} enregistrement(s) de « {label} » ?"):
+            parts.append(f"envoi refusé, {to_send} enregistrement(s) restent sur ce poste")
+            to_send = 0
+        else:
+            push = git(repo, "push", "--quiet", env=env, credentials=credentials)
+            if push.returncode != 0:
+                raise CliError(
+                    f"« {label} » ({repo}) : l'envoi au serveur a été refusé ; si quelqu'un vient d'envoyer des changements, "
+                    f"relancez « bin/dokopilot sync {client} ».\n{git_failure(push)}"
+                )
+            parts.append(f"{to_send} envoyé(s)")
     summary = ", ".join(part for part in parts if part) or "déjà à jour"
     if untracked:
         summary += f" ; {len(untracked)} nouveau(x) fichier(s) non enregistré(s) dans Git, restés sur ce poste"
@@ -668,14 +715,15 @@ def cmd_sync(args: argparse.Namespace) -> int:
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     env.update(GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="", SSH_ASKPASS="", GIT_COMMITTER_NAME=name,
                GIT_COMMITTER_EMAIL=str(person.get("email", "")))
-    credentials = Path.home() / ".config" / "dokopilot" / args.client / "git-credentials"
+    client_id = str((settings.get("client") or {}).get("id") or args.client)
+    credentials = Path.home() / ".config" / "dokopilot" / client_id / "git-credentials"
     print(f"Synchronisation de {workspace} pour {name} ({person['id']}) :")
     present = {label for label, _ in clones}
     for label, sub in WORKSPACE_REPOSITORIES:
         if label not in present:
             print(f"· {label} : aucune copie sur ce poste ({workspace / sub})")
             continue
-        print(sync_repository(label, workspace / sub, args.client, env, credentials), flush=True)
+        print(sync_repository(label, workspace / sub, args.client, env, credentials, args.yes), flush=True)
     print(f"Synchronisation terminée ({len(clones)} dépôt(s)).")
     return 0
 
@@ -779,8 +827,9 @@ def parser() -> argparse.ArgumentParser:
     sp.add_argument("--person", help="id de la personne qui utilise ce poste (users.people ; par défaut : le dirigeant)")
     sp.set_defaults(func=cmd_playbook("harness.yml"))
 
-    sp = sub.add_parser("sync", help="synchroniser les copies du contexte de ce poste avec Forgejo (pull --rebase, puis push)")
+    sp = sub.add_parser("sync", help="synchroniser les copies du contexte de ce poste avec Forgejo (reçoit, montre, puis envoie)")
     sp.add_argument("client")
+    sp.add_argument("--yes", action="store_true", help="envoyer sans demander (les règles reçues sont toujours montrées et demandées)")
     sp.add_argument("--person", help="id de la personne qui synchronise (users.people ; par défaut : le dirigeant)")
     sp.add_argument("--dest", help="dossier de travail (par défaut : ~/DokoPilot/<client>)")
     sp.set_defaults(func=cmd_sync)

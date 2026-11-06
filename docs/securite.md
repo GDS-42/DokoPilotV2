@@ -124,12 +124,13 @@ check` vérifie que chaque compte lit ses dépôts et aucun autre. Une personne 
 `users.people` voit ses comptes désactivés (connexion interdite, jeton supprimé) ; son dépôt
 `perso-<id>` est gardé ([exploitation.md](exploitation.md)).
 
-**Jetons.** Chaque compte de personne et d'assistant a un jeton Git de portée
-`write:repository`, limité à ses dépôts ; il est remplacé quand ces dépôts changent
-([D-30](decisions.md)), et il faut alors relancer `bin/dokopilot harness` sur le poste.
+**Jetons.** Chaque compte de personne a un jeton Git de portée `write:repository`, limité à ses
+dépôts ; il est remplacé quand ces dépôts changent ([D-30](decisions.md)), et il faut alors
+relancer `bin/dokopilot harness` sur le poste. Les comptes d'assistant n'ont aucun jeton : rien ne
+s'en sert, l'agent ne poussant jamais ([D-32](decisions.md)).
 
-- Sur le serveur : `/etc/dokopilot/forgejo/<compte>.json` (`user`, `password`, `token`), lisible
-  par root seulement (fichier 0600, dossier 0700).
+- Sur le serveur : `/etc/dokopilot/forgejo/<compte>.json` (`user`, `password`, et `token` pour
+  une personne), lisible par root seulement (fichier 0600, dossier 0700).
 - Sur le poste : `bin/dokopilot harness` lit, avec sudo et sans rien afficher, le fichier de la
   **personne** seulement, et écrit son jeton dans `~/.config/dokopilot/<client>/git-credentials`
   et son mot de passe initial dans `forgejo-password` (fichiers 0600, dossier 0700), **hors du
@@ -161,7 +162,17 @@ avant d'envoyer quoi que ce soit :
 - la copie a une seule adresse de serveur, qui est celle de Forgejo inscrite dans ce fichier, sans
   identifiants dans l'adresse ;
 - aucun conflit ni rebasage n'est en cours, et aucun fichier suivi n'est modifié sans être
-  enregistré (les fichiers nouveaux non enregistrés restent sur le poste, signalés).
+  enregistré (les fichiers nouveaux non enregistrés restent sur le poste, signalés) ;
+- aucune branche ne suit un autre serveur que `origin`, et le dossier `.git` ne renvoie pas
+  ailleurs.
+
+Ensuite, `sync` **montre** à la personne ce qu'il va envoyer (auteur, message et fichiers de
+chaque enregistrement) et attend son accord (`--yes` l'en dispense) ; sans accord, rien n'est
+envoyé. Les règles des agents reçues du serveur (`AGENTS.md`, `CLAUDE.md`, `.agents/`,
+`.gitignore`…) sont montrées et doivent être acceptées, même avec `--yes`, et
+`bin/dokopilot harness` ne les prend jamais en silence : un membre, ou son agent, ne peut pas
+changer les règles de l'agent du dirigeant sans que celui-ci les voie. Forgejo refuse en outre
+toute réécriture (force push) et toute suppression de la branche principale des dépôts.
 
 Puis il lance `git pull --rebase` et `git push` sans les crochets (hooks) ni le fsmonitor de la
 copie, sans les variables `GIT_*` de la session, sans jamais demander de mot de passe, avec les

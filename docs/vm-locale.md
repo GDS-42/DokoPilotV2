@@ -173,10 +173,11 @@ git -C ~/DokoPilot/atelier-demo log --oneline -1   # « Contexte initial prépar
 cd ~/DokoPilot/atelier-demo
 echo "# Essai de synchronisation" > 00-Boite-de-reception/essai.md
 git add 00-Boite-de-reception/essai.md && git commit -m "Ajoute une note d'essai"
-cd ~/DokoPilotV2 && bin/dokopilot sync atelier-demo
+~/DokoPilotV2/bin/dokopilot sync atelier-demo
 ```
 
-`sync` affiche une ligne par dépôt (`✓ entreprise : 1 envoyé(s)`, `✓ direction : déjà à jour`,
+`sync` montre l'enregistrement à envoyer et demande votre accord (tapez `o`), puis affiche une
+ligne par dépôt (`✓ entreprise : 1 envoyé(s)`, `✓ direction : déjà à jour`,
 `✓ perso : déjà à jour`) ; la note apparaît dans Forgejo, dans `atelier-demo/entreprise`. Il
 refuse d'envoyer un fichier modifié qui n'a pas été enregistré (`git commit`) et dit quoi faire.
 

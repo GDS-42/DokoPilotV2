@@ -141,14 +141,14 @@ L'agent propose, la personne valide et envoie ([D-21](decisions.md)) :
  | la personne relit (git log -p),     |  3. sync  |                         |
  | puis : bin/dokopilot sync <client>  | --------> |                         |
  +-------------------------------------+           +-------------------------+
-   sync : contrôle de chaque copie, git pull --rebase, puis git push,
-   avec le jeton de la personne
+   sync : contrôle de chaque copie, réception (git fetch, rebase ; règles reçues montrées et
+   acceptées), puis ce qui part est montré et accepté avant git push, avec le jeton de la personne
 ```
 
 `bin/dokopilot sync` vérifie la configuration Git de chaque copie avant d'envoyer quoi que ce
 soit ([securite.md](securite.md#lagent-ne-pousse-jamais)). Les autres personnes reçoivent les
 changements à leur prochain `sync` (ou `harness`, qui met à jour une copie propre en avance
-rapide).
+rapide, sauf quand les règles des agents ont changé : il renvoie alors vers `sync`).
 
 ## Les flux
 

@@ -228,7 +228,7 @@
            ('Dokos : ' ~ _harness_dokos_url ~ ' — l’agent agit sous l’identité de l’assistant, qui prépare des brouillons sans jamais valider.')
              if _harness_dokos_user | bool else 'Dokos : non configuré pour cette personne.',
            'Contexte : ' ~ _harness_forgejo_url ~ dp.client.id ~ '/ ; l’agent commite au nom de « ' ~ _harness_assistant_identity.name
-             ~ ' » et ne pousse jamais : envoyez les changements avec « bin/dokopilot sync ' ~ dp.client.id
+             ~ ' » et ne pousse jamais : envoyez les changements avec « ' ~ (playbook_dir | dirname | dirname) ~ '/bin/dokopilot sync ' ~ dp.client.id
              ~ (' --person ' ~ _harness_person.id if not _harness_dirigeant | bool else '') ~ ' ».',
            'Jetons, mots de passe et clé du modèle : ' ~ harness_config_dir ~ ' (privé, jamais dans le dossier de travail).',
            ('Fichiers modifiés sur ce poste, remplacés et conservés en .bak : ' ~ (_harness_backups | join(', ')))

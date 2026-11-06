@@ -112,7 +112,7 @@ cette machine », ajoutez `--local -K` aux commandes qui passent par Ansible (`i
 | `bin/dokopilot install <client>` | Installer ou mettre à jour tout le serveur (se relance sans risque) |
 | `bin/dokopilot check <client>` | Contrôles de fonctionnement et de sécurité, sans rien modifier |
 | `bin/dokopilot harness <client> [--person <id>]` | Configurer le harnais et les copies du contexte sur ce poste |
-| `bin/dokopilot sync <client> [--person <id>]` | Envoyer à Forgejo le travail enregistré sur ce poste (`git pull --rebase`, puis `git push`) |
+| `bin/dokopilot sync <client> [--person <id>] [--yes]` | Recevoir les changements de Forgejo, montrer ce qui va partir, puis l'envoyer après accord |
 | `bin/dokopilot backup <client>`, `restore <client> --confirm` | Sauvegarder maintenant, restaurer |
 | `bin/dokopilot demo-reset <client>` | Recharger les données de test (profil demo) |
 | `bin/dokopilot secrets <client> edit\|show <clé>\|keys` | Lire ou modifier les secrets chiffrés |

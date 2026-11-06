@@ -205,11 +205,12 @@ WSL (façon B).
   cd ~/DokoPilot/atelier-demo
   echo "# Essai de synchronisation" > 00-Boite-de-reception/essai.md
   git add 00-Boite-de-reception/essai.md && git commit -m "Ajoute une note d'essai"
-  cd ~/DokoPilotV2 && bin/dokopilot sync atelier-demo
+  ~/DokoPilotV2/bin/dokopilot sync atelier-demo
   ```
 
-  `sync` affiche `✓ entreprise : 1 envoyé(s)`, puis `déjà à jour` pour `direction` et `perso` ;
-  la note apparaît dans Forgejo, dans `atelier-demo/entreprise`.
+  `sync` montre l'enregistrement à envoyer (`essai.md`) et demande votre accord : tapez `o`.
+  Il affiche ensuite `✓ entreprise : 1 envoyé(s)`, puis `déjà à jour` pour `direction` et
+  `perso` ; la note apparaît dans Forgejo, dans `atelier-demo/entreprise`.
 
 Faites un point de contrôle Hyper-V « DokoPilot installé ».
 

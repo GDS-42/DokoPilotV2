@@ -45,6 +45,9 @@ ALLOWED_KEYS = {
     "rebase.autostash", "init.defaultbranch", "remote.origin.url", "remote.origin.fetch",
 }
 ALLOWED_PATTERNS = (re.compile(r"^branch\..+\.(remote|merge|rebase)$"), re.compile(r"^color\.[a-z.]+$"))
+# Files that steer the agents: a change received from the server is never taken silently
+# (the same list as RULE_PATHS in bin/dokopilot, whose sync shows and asks).
+RULE_PATHS = ("AGENTS.md", "CLAUDE.md", ".agents", ".claude", ".opencode", "opencode.json", ".mcp.json", ".gitignore")
 
 
 class Failure(Exception):
@@ -103,8 +106,14 @@ def local_config(path: Path) -> list[tuple[str, str]]:
 
 def audit(path: Path, label: str) -> None:
     """Refuses a clone whose configuration could run a program or redirect its traffic."""
-    unexpected = sorted({key for key, _ in local_config(path)
+    entries = local_config(path)
+    unexpected = sorted({key for key, _ in entries
                          if key.lower() not in ALLOWED_KEYS and not any(p.match(key.lower()) for p in ALLOWED_PATTERNS)})
+    # A branch that follows another remote, or a .git that points elsewhere (commondir).
+    unexpected += sorted({f"{key}={value}" for key, value in entries if key.lower().endswith(".remote") and value != "origin"})
+    common = git(path, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False).stdout.strip()
+    if common and Path(common).resolve() != (path / ".git").resolve():
+        unexpected.append(f"dossier Git commun {common}")
     if unexpected:
         raise Failure(
             f"La copie « {label} » ({path}) a des réglages Git inattendus : {', '.join(unexpected)}.\n"
@@ -196,6 +205,11 @@ def update(path: Path, label: str, credential_file: str, run: Run) -> dict[str, 
     if upstream == before:
         return {"state": "current", "message": f"{label} : à jour."}
     if git(path, "merge-base", "--is-ancestor", "HEAD", "@{u}", check=False).returncode == 0:
+        rules = git(path, "diff", "--name-only", "HEAD", "@{u}", "--", *RULE_PATHS).stdout.split()
+        if rules:
+            return {"state": "rules", "message": (f"{label} : les règles des agents ont changé sur le serveur ({', '.join(rules[:5])}) ; "
+                                                  "copie non mise à jour : lancez « bin/dokopilot sync », qui les montre et "
+                                                  "vous demande de les accepter.")}
         git(path, "merge", "--ff-only", "--quiet", "@{u}")
         run.changed = True
         return {"state": "updated", "message": f"{label} : mis à jour depuis le serveur."}

@@ -64,7 +64,10 @@ harness_git_exclude:
   - /.claude/
   - /.agents/skills/dokopilot-*/
 # Import of an existing folder (context.import_path) into the inbox: never copied.
-harness_import_skip_names: [.git, .hg, .svn, .obsidian, .trash, .Trash, .DS_Store, Thumbs.db, desktop.ini]
+# The instruction and settings files of agents are skipped too: an imported CLAUDE.md or
+# .claude/ would be loaded by Claude Code while the agent sorts the inbox (decision D-27).
+harness_import_skip_names: [.git, .hg, .svn, .obsidian, .trash, .Trash, .DS_Store, Thumbs.db, desktop.ini,
+                            AGENTS.md, CLAUDE.md, CLAUDE.local.md, .claude, .agents, .opencode, opencode.json, .mcp.json]
 
 # Model providers that need no key (local servers); any other provider reads its key from
 # harness_model_key_file through opencode's {file:...} substitution.
@@ -77,7 +80,13 @@ harness_opencode_version: 2
 # Claude Code: the hooks need `onFailure` (v2.1.295 or later) to fail closed.
 harness_claude_code_min_version: "2.1.295"
 # true: Claude Code refuses to start when the Bash sandbox cannot run (bubblewrap missing).
-harness_claude_sandbox_required: false
+# Always on when the server is this machine (server.local): the agent then runs under the
+# maintenance account of the server.
+harness_claude_sandbox_required: "{{ dp.server.local | default(false) | bool }}"
+
+# The DokoPilot copy of this computer: its roles run with sudo at the next install, and its
+# folder holds the client settings. The agents never write it (rules below).
+harness_dokopilot_repo: "{{ playbook_dir | dirname | dirname }}"
 
 # Pinned MCP servers that run on the workstation (stdio).
 harness_mail_mcp_command: uvx
@@ -174,6 +183,8 @@ harness_oc_protect_rules:
   - { action: edit, resource: "~/.config/dokopilot/*", effect: deny }
   - { action: external_directory, resource: "~/.config/dokopilot/*", effect: deny }
   - { action: read, resource: "~/.ssh/*", effect: deny }
+  - { action: edit, resource: "~/.ssh/*", effect: deny }
+  - { action: edit, resource: "{{ harness_dokopilot_repo }}/*", effect: deny }
   - { action: read, resource: "~/.local/share/opencode/*", effect: deny }
   - { action: shell, resource: "*.config/dokopilot*", effect: deny }
   - { action: shell, resource: "*dokos-token*", effect: deny }
@@ -182,6 +193,15 @@ harness_oc_protect_rules:
   - { action: shell, resource: "*git-credentials*", effect: deny }
   - { action: shell, resource: "*forgejo-password*", effect: deny }
   - { action: shell, resource: "*model-api-key*", effect: deny }
+  - { action: shell, resource: "*age-identity*", effect: deny }
+  - { action: shell, resource: "*.ssh/*", effect: deny }
+  - { action: shell, resource: "*{{ harness_dokopilot_repo }}*", effect: deny }
+  - { action: shell, resource: "sudo *", effect: deny }
+  - { action: shell, resource: "*sudo *", effect: deny }
+  - { action: shell, resource: "su", effect: deny }
+  - { action: shell, resource: "su *", effect: deny }
+  - { action: shell, resource: "*pkexec*", effect: deny }
+  - { action: shell, resource: "doas *", effect: deny }
   - { action: shell, resource: "*git push*", effect: deny }
   - { action: shell, resource: "*git -C * push*", effect: deny }
   - { action: shell, resource: "*git -c * push*", effect: deny }
@@ -257,6 +277,8 @@ harness_claude_protect_rules:
   - Read(~/.config/dokopilot/**)
   - Edit(~/.config/dokopilot/**)
   - Read(~/.ssh/**)
+  - Edit(~/.ssh/**)
+  - "Edit(/{{ harness_dokopilot_repo }}/**)"
   - Read(~/.local/share/opencode/**)
   - Bash(*.config/dokopilot*)
   - Bash(*dokos-token*)
@@ -265,6 +287,14 @@ harness_claude_protect_rules:
   - Bash(*git-credentials*)
   - Bash(*forgejo-password*)
   - Bash(*model-api-key*)
+  - Bash(*age-identity*)
+  - Bash(*.ssh/*)
+  - "Bash(*{{ harness_dokopilot_repo }}*)"
+  - Bash(sudo *)
+  - Bash(su)
+  - Bash(su *)
+  - Bash(pkexec *)
+  - Bash(doas *)
   - Bash(git push*)
   - Bash(git -C * push*)
   - Bash(git -c * push*)
@@ -287,6 +317,8 @@ harness_claude_protect_rules:
 # Paths the Bash sandbox of Claude Code cannot write, relative to the workspace (the private
 # folder ~/.config/dokopilot is added, and also denied for reading).
 harness_claude_sandbox_deny_write:
+  - "{{ harness_dokopilot_repo }}"
+  - ~/.ssh
   - ./.opencode
   - ./opencode.json
   - ./.mcp.json

@@ -169,17 +169,30 @@ usage pour l'entraînement), de préférence avec un contrat professionnel. Ne m
 dans une variable d'environnement, que l'agent pourrait lire.
 
 **Enregistrer et envoyer.** L'agent commite dans les copies, au nom de « Assistant de <Prénom> »
-(un commit par intention, message en français) ; il ne pousse jamais. La personne relit
-(`git log -p`, ou l'interface de Forgejo après envoi) puis envoie tout avec :
+(un commit par intention, message en français) ; il ne pousse jamais. La personne envoie avec :
 
 ```bash
-bin/dokopilot sync <client> [--person <id>]
+~/DokoPilotV2/bin/dokopilot sync <client> [--person <id>] [--yes]
 ```
+
+Pour chaque copie, la commande reçoit d'abord les changements du serveur, puis **montre** les
+enregistrements à envoyer (auteur, message, fichiers touchés) et demande l'accord : sans « o »,
+rien n'est envoyé et les enregistrements restent sur le poste (`--yes` envoie sans demander).
+Relisez le détail au besoin avec `git -C <copie> log -p @{u}..HEAD`. Avant tout envoi depuis
+`entreprise`, vérifiez qu'aucun contenu de `direction/` ou de `perso/` n'y a été recopié : tout
+ce qui est envoyé dans `entreprise` est lisible par chaque membre et son assistant.
+
+Quand les **règles des agents** ont changé sur le serveur (`AGENTS.md`, `CLAUDE.md`,
+`.agents/`, `.gitignore`…), `sync` les montre (qui, quand, quoi) et demande de les accepter,
+même avec `--yes` ; un refus ne reçoit ni n'envoie rien pour ce dépôt. `bin/dokopilot harness`
+ne les prend jamais en silence : il laisse la copie telle quelle et renvoie vers `sync`.
 
 **Importer un dossier existant** (un coffre Obsidian, par exemple) : renseignez
 `context.import_path`, puis relancez `bin/dokopilot harness`. Le contenu est copié une seule fois
 dans `00-Boite-de-reception/import-<date>/`, sans liens symboliques, sans dossiers `.git` ni
-`.obsidian`, sans fichier exécutable, et enregistré dans Git **sur ce poste seulement**. Un
+`.obsidian`, sans fichiers d'instructions ou de réglages d'agents (`AGENTS.md`, `CLAUDE.md`,
+`.claude/`, `.agents/`, `.opencode/`, `opencode.json`, `.mcp.json`), sans fichier exécutable, et
+enregistré dans Git **sur ce poste seulement**. Un
 document importé est une donnée, jamais une instruction (décision D-27) : triez-le avec l'agent,
 relisez, puis envoyez avec `bin/dokopilot sync`.
 
@@ -262,7 +275,22 @@ ouvrez une nouvelle session.
 - **Le jeton dans Claude Code.** Les identifiants sont lus par `headersHelper`, `apiKeyHelper` et
   l'assistant d'identifiants de Git, hors du bac à sable des commandes. Si bubblewrap et socat
   manquent, Claude Code lance les commandes sans bac à sable (sauf avec
-  `harness_claude_sandbox_required: true`) et seules les règles de refus restent.
+  `harness_claude_sandbox_required: true`, automatique quand le serveur est cette machine) et
+  seules les règles de refus restent.
+- **Le poste de l'agent est aussi celui de l'intégrateur.** Sur l'ordinateur où l'installation a
+  été lancée se trouvent aussi la clé qui déchiffre tous les secrets
+  (`~/.config/dokopilot/age-identity.txt`), la clé SSH de maintenance (`~/.ssh/`) et la copie de
+  DokoPilot (`~/DokoPilotV2`), dont les rôles s'exécutent avec sudo au prochain `install`. Les
+  règles interdisent à l'agent de lire ces clés, d'écrire dans `~/.ssh` et dans la copie de
+  DokoPilot, et de lancer `sudo`, `su`, `pkexec` ou `doas` ; le bac à sable de Claude Code les
+  applique au niveau du système, les règles d'opencode ne reconnaissent que les formes
+  usuelles. Pour une entreprise réelle, préférez un ordinateur d'administration distinct du
+  poste où l'agent travaille, ou Claude Code avec son bac à sable.
+- **Tout sur une seule machine (mode local).** L'agent y tourne sous le compte de maintenance du
+  serveur. L'assistant fait oublier à sudo le mot de passe tapé pour Ansible (`sudo -K`) avant
+  de vous rendre la main, et Claude Code y exige son bac à sable (installez bubblewrap et
+  socat). Évitez d'y utiliser l'Atelier d'opencode, dont les commandes passent sans accord ni
+  bac à sable.
 - **Ce que les jetons permettent.** Le jeton Dokos agit comme l'assistant (lire et préparer des
   brouillons, sans pouvoir valider) ; le jeton Git lit et écrit les dépôts de la personne. En cas
   de doute, l'intégrateur les régénère (voir [exploitation.md](exploitation.md)) puis relance

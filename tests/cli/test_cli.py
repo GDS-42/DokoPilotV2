@@ -54,8 +54,9 @@ class CliTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def cli(self, *args: str, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-        result = subprocess.run([sys.executable, str(CLI), *args], env={**self.env, **(env or {})}, text=True, capture_output=True)
+    def cli(self, *args: str, check: bool = True, env: dict[str, str] | None = None, answers: str = "") -> subprocess.CompletedProcess[str]:
+        result = subprocess.run([sys.executable, str(CLI), *args], env={**self.env, **(env or {})}, text=True, capture_output=True,
+                                input=answers)
         if check and result.returncode != 0:
             self.fail(f"bin/dokopilot {' '.join(args)} failed:\n{result.stdout}\n{result.stderr}")
         return result
@@ -265,8 +266,11 @@ class CliTest(unittest.TestCase):
         self.commit(workspace, "00-Boite-de-reception.md", "Note locale\n", "Note de l'assistant")
         self.commit(workspace / "perso", "memoire-vive.md", "Préférences\n", "Mémoire")
         (workspace / "perso" / "brouillon.md").write_text("pas encore enregistré\n", encoding="utf-8")
-        result = self.cli("sync", "acme")
+        result = self.cli("sync", "acme", answers="o\noui\n")
         self.assertIn(f"Synchronisation de {workspace} pour Camille Martin (camille)", result.stdout)
+        # What is sent is shown before the person accepts it.
+        self.assertIn("« entreprise » : 1 enregistrement(s) à envoyer vers Forgejo", result.stdout)
+        self.assertIn("00-Boite-de-reception.md | 1 +", result.stdout)
         self.assertIn("✓ entreprise : 1 changement(s) reçu(s), 1 envoyé(s)", result.stdout)
         self.assertIn("· direction : aucune copie sur ce poste", result.stdout)
         self.assertIn("✓ perso : 1 envoyé(s) ; 1 nouveau(x) fichier(s) non enregistré(s)", result.stdout)
@@ -317,7 +321,7 @@ class CliTest(unittest.TestCase):
         hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
         hook.chmod(0o755)
         self.commit(workspace, "note.md", "Note\n", "Note de l'assistant")
-        result = self.cli("sync", "acme", env={"GIT_AUTHOR_NAME": "Assistant", "GIT_COMMITTER_NAME": "Assistant"})
+        result = self.cli("sync", "acme", "--yes", env={"GIT_AUTHOR_NAME": "Assistant", "GIT_COMMITTER_NAME": "Assistant"})
         self.assertIn("✓ entreprise : 1 envoyé(s)", result.stdout)
         self.assertFalse(marker.exists(), "a hook planted in the clone ran during sync")
         # Settings an agent could write: each one stops sync before anything is sent.
@@ -338,6 +342,12 @@ class CliTest(unittest.TestCase):
                 if key == "credential.helper":
                     self.git(workspace, "config", "--local", "--add", "credential.helper", "")
                     self.git(workspace, "config", "--local", "--add", "credential.helper", f"store --file {self.credentials_file()}")
+        # A branch that follows another remote is refused too.
+        self.git(workspace, "config", "--local", "branch.main.remote", "elsewhere")
+        other_remote = self.cli("sync", "acme", "--yes", check=False)
+        self.assertEqual(other_remote.returncode, 2)
+        self.assertIn("branch.main.remote=elsewhere", other_remote.stderr)
+        self.git(workspace, "config", "--local", "branch.main.remote", "origin")
         # An HTTP remote must be the Forgejo of the credential file.
         self.credentials_file().parent.mkdir(parents=True, exist_ok=True)
         self.credentials_file().write_text("http://camille:jeton@forgejo.example.test%3a3000\n", encoding="utf-8")
@@ -346,6 +356,28 @@ class CliTest(unittest.TestCase):
         self.assertEqual(elsewhere.returncode, 2)
         self.assertIn("n'est pas celle de Forgejo", elsewhere.stderr)
         self.assertNotIn("jeton", elsewhere.stderr + elsewhere.stdout)
+
+    def test_sync_sends_nothing_the_person_refuses_and_asks_before_taking_new_rules(self) -> None:
+        self.init_client()
+        workspace, bare, other = self.make_workspace()
+        self.commit(workspace, "brouillon.md", "Note de l'agent\n", "Copie d'une note de direction")
+        refused = self.cli("sync", "acme")  # no answer: nothing is sent
+        self.assertIn("envoi refusé, 1 enregistrement(s) restent sur ce poste", refused.stdout)
+        self.assertNotIn("Copie d'une note", self.git(bare / "entreprise.git", "log", "--format=%s", "main"))
+        # A colleague changes the rules of the agents: shown, and asked even with --yes.
+        self.commit(other, "AGENTS.md", "Nouvelle règle\n", "Règle changée")
+        self.git(other, "pull", "-q", "--rebase")
+        self.git(other, "push", "-q")
+        head = self.git(workspace, "rev-parse", "HEAD")
+        kept = self.cli("sync", "acme", "--yes", check=False)
+        self.assertEqual(kept.returncode, 2)
+        self.assertIn("les règles des agents ont changé sur le serveur (AGENTS.md)", kept.stdout)
+        self.assertIn("Règle changée", kept.stdout)
+        self.assertIn("règles refusées ; rien n'a été reçu ni envoyé", kept.stderr)
+        self.assertEqual(self.git(workspace, "rev-parse", "HEAD"), head)
+        accepted = self.cli("sync", "acme", "--yes", answers="o\n")
+        self.assertIn("✓ entreprise : 1 changement(s) reçu(s), 1 envoyé(s)", accepted.stdout)
+        self.assertTrue((workspace / "AGENTS.md").exists())
 
 
 if __name__ == "__main__":
