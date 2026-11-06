@@ -12,3 +12,7 @@ firewall_tailscale_cidrs:
   - fd7a:115c:a1e0::/48
 firewall_lan_http_port: 80
 firewall_icmp_limit: 20/second burst 50 packets
+# Forgejo (context repositories), opened when dp.context.enabled: Caddy port in lan mode (from
+# network.lan.allowed_cidrs), tailscale serve port in tailscale mode (on tailscale0 only).
+firewall_forgejo_lan_port: "{{ dokopilot_forgejo_lan_port | default(3000) }}"
+firewall_forgejo_tailscale_port: "{{ dokopilot_forgejo_tailscale_port | default(8443) }}"

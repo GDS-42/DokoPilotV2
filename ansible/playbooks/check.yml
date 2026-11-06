@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Non-destructive checks, usable in production: bin/dokopilot check <client>.
-# Run one part with --tags host or --tags dokos.
+# Run one part with --tags host, --tags dokos or --tags forgejo.
 - name: DokoPilot checks
   hosts: dokopilot
   become: true
@@ -23,3 +23,10 @@
         name: dokos_config
         tasks_from: check
       tags: [dokos]
+
+    - name: Forgejo checks (settings, context repositories, accounts, rights)
+      ansible.builtin.import_role:
+        name: forgejo
+        tasks_from: check
+      tags: [forgejo]
+      when: dp.context.enabled | bool

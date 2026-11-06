@@ -71,7 +71,8 @@
     _exposed_ports: "{{ _listen | difference(_loopback) | difference(_tailnet) | map('regex_replace', '^.*:', '') | unique | list }}"
     _allowed_ports: >-
       {{ [dp.server.ssh_port | string]
-         + (['80'] if dp.network.mode == 'lan' else []) }}
+         + (['80'] if dp.network.mode == 'lan' else [])
+         + ([dokopilot_forgejo_lan_port | default(3000) | string] if dp.network.mode == 'lan' and dp.context.enabled | default(false) | bool else []) }}
     _docker_members: "{{ (ansible_facts.getent_group | default({})).get('docker', ['', '', ''])[2] | default('') }}"
     _maintenance_names: "{{ dp.maintenance.users | map(attribute='name') | list }}"
     _unit_states: >-

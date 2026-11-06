@@ -3,10 +3,11 @@
 {%- set assistant = forgejo_assistant_prefix ~ person.id %}
 # Consignes personnelles — {{ name }}
 
-Vous assistez **{{ name }}**, {{ 'qui dirige' if person.role == 'dirigeant' else 'membre de' }}
-{{ context_company }}. Ce dépôt (`{{ context_org }}/perso-{{ person.id }}`) est le sien : seuls {{ person.first_name }}
-{%- if person.assistant | default(false) %} et son assistant (`{{ assistant }}`){% endif %} y ont accès. Les consignes communes
-(`../AGENTS.md`) s'appliquent toutes ; ce fichier ne fait que les préciser pour {{ person.first_name }}.
+Vous assistez **{{ name }}** ({{ 'dirigeant' if person.role == 'dirigeant' else 'membre' }} de l'entreprise {{ context_company }}).
+Ce dépôt, `{{ context_org }}/perso-{{ person.id }}`, est le sien : seuls {{ person.first_name }}
+{%- if person.assistant | default(false) %} et son assistant (`{{ assistant }}`){% endif %} y ont accès.
+Les consignes communes (`../AGENTS.md`) s'appliquent toutes ; ce fichier les précise pour
+{{ person.first_name }}.
 
 ## Qui
 

@@ -89,7 +89,7 @@ Ajout dans `config/secrets.example.yml` : `forgejo_admin_password: generate`. Le
 | Pare-feu | `lan` : TCP 3000 depuis `network.lan.allowed_cidrs` ; `tailscale` : TCP 8443 sur `tailscale0` |
 | Réglages | inscription fermée, connexion obligatoire pour tout voir, mode hors ligne, aucun courriel, aucune télémétrie, OAuth désactivé |
 | `ROOT_URL` | fait `dokopilot_forgejo_url` : `http://<server.address>:3000/` (lan, `http://localhost:3000/` en mode local), `https://<nom MagicDNS>:8443/` (tailscale) |
-| Comptes | administrateur `dokopilot-admin` (`secrets.forgejo_admin_password`) ; une personne = un compte `<id>` (courriel, nom, mot de passe initial aléatoire, changement obligatoire) ; un assistant = un compte `assistant-<id>` (courriel `assistant_email`, pas de connexion web utile) |
+| Comptes | administrateur `dokopilot-admin` (`secrets.forgejo_admin_password`) ; une personne = un compte `<id>` (courriel, nom, mot de passe initial aléatoire, à changer par la personne : un changement imposé bloquerait Git, voir D-30) ; un assistant = un compte `assistant-<id>` (courriel `assistant_email`, pas de connexion web utile) |
 | Organisation et dépôts | organisation `<client.id>` ; dépôts `entreprise`, `direction` (si `context.direction`), `perso-<id>` pour chaque personne |
 | Droits | équipe `membres` (toutes les personnes et leurs assistants) en écriture sur `entreprise` ; équipe `direction` (dirigeant et son assistant) en écriture sur `direction` ; `perso-<id>` : la personne (administratrice) et son assistant (écriture) ; personne d'autre |
 | Identifiants | `/etc/dokopilot/forgejo/<compte>.json` (root, 0600, dossier 0700) = `{"user", "password", "token"}`, créé seulement s'il manque (idempotent) |

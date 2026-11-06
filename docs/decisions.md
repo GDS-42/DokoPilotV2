@@ -134,3 +134,11 @@ Décisions prises avec le porteur du projet le 2026-11-06 ; la spécification qu
 - **Contexte** : le rôle `Assistant IA` donne les mêmes droits de préparation à tout assistant, quels que soient les droits de la personne qu'il sert. L'assistant d'un membre pourrait donc préparer des factures d'achat même si ce membre n'a pas accès aux achats.
 - **Choix** : en version 0.2, seul l'assistant du dirigeant a un utilisateur dans Dokos. Les membres et leurs assistants ont leurs comptes dans Forgejo (contexte) ; le dirigeant crée dans Dokos les comptes de ses salariés avec les rôles qui conviennent. Le harnais d'un membre fonctionne sans serveur MCP Dokos.
 - **Revoir si** : on sait dériver les droits de l'assistant de ceux de la personne (droits de la personne ∩ périmètre de l'assistant).
+
+## D-30 — Forgejo : comptes, sauvegarde et version
+
+- **Version** : Forgejo 17.0.1 (image `codeberg.org/forgejo/forgejo:17.0.1-rootless`, figée par empreinte), GPL-3.0 ou plus.
+- **Mot de passe initial** : les personnes ne sont pas obligées de le changer à la première connexion. Avec cette obligation, Forgejo refuse Git et l'API, même avec un jeton, tant que le mot de passe n'a pas été changé : le poste ne pourrait pas cloner le contexte juste après l'installation. Le mot de passe initial est remis à la personne par `bin/dokopilot harness` ; elle le change dans Forgejo.
+- **Jetons** : portée `write:repository`, limités aux dépôts du compte ; un jeton est remplacé quand ses dépôts changent, ce qui demande de relancer `bin/dokopilot harness`.
+- **Sauvegarde** : Forgejo est arrêté quelques secondes et son volume copié en entier avant restic, plutôt qu'un `forgejo dump` ; la restauration est décrite dans exploitation.md.
+- **Fonctions coupées** : inscription, courriels, télémétrie, OAuth, webhooks, Actions, paquets, fédération ; les équipes écrivent dans le code, les tickets, les demandes de fusion et le wiki.

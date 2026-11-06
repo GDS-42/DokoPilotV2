@@ -25,5 +25,7 @@
           - "Entrepreneur : {{ dp.users.entrepreneur.email }} — mot de passe initial : bin/dokopilot secrets {{ dp.client.id }} show entrepreneur_password"
           - "Administrateur : Administrator — bin/dokopilot secrets {{ dp.client.id }} show dokos_admin_password"
           - "Assistant dans Dokos : {{ dp.users.assistants | map(attribute='email') | join(', ') }} (jeton sur le serveur, récupéré par bin/dokopilot harness)"
-          - "Personnes : {{ dp.users.people | map(attribute='id') | join(', ') }} — comptes Forgejo et contextes perso ; poste de chacune : bin/dokopilot harness {{ dp.client.id }} --person <id>"
+          - >-
+            Personnes : {{ dp.users.people | map(attribute='id') | join(', ') }} — comptes Forgejo et contextes perso ;
+            poste de chacune : bin/dokopilot harness {{ dp.client.id }} --person <id>
           - "Contrôles : bin/dokopilot check {{ dp.client.id }} — poste de l'entrepreneur : bin/dokopilot harness {{ dp.client.id }}"
