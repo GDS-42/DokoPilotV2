@@ -98,8 +98,12 @@ def ensure_assistants(payload: dict[str, Any]) -> dict[str, Any]:
     people: {email: full name} (the person each assistant works for),
     existing_credentials: [{user, api_key, api_secret}] already written on the server.
 
-    Returns the credentials of every assistant ({user, api_key, api_secret}). Users that
-    hold `marker_role` (Assistant IA) but are no longer configured are disabled.
+    Returns the credentials of every assistant ({user, api_key, api_secret}). An assistant
+    this installation created (it has a credential file: `existing_credentials`) and that is
+    no longer configured is disabled. A person who was given `marker_role` (Assistant IA) in
+    the desk is never disabled: the dirigeant creates the employees' accounts with the roles
+    they choose, and that role only gives draft rights. A configured assistant that had been
+    disabled is enabled again.
     """
     site = payload["site"]
     require_site(site)
@@ -134,6 +138,13 @@ def ensure_assistants(payload: dict[str, Any]) -> dict[str, Any]:
                 user.insert()
                 changes.append(f"{email}: created")
             user = frappe.get_doc("User", email)
+            if not user.enabled:
+                # Removed from the configuration earlier, then declared again.
+                user.enabled = 1
+                user.flags.ignore_permissions = True
+                user.save()
+                changes.append(f"{email}: enabled again")
+                user = frappe.get_doc("User", email)
             current = sorted({row.role for row in user.roles})
             if current != sorted(wanted_roles):
                 user.set("roles", [])
@@ -158,7 +169,9 @@ def ensure_assistants(payload: dict[str, Any]) -> dict[str, Any]:
         configured = {assistant["email"] for assistant in payload["assistants"]}
         disabled: list[str] = []
         holders = frappe.get_all("Has Role", filters={"role": payload["marker_role"], "parenttype": "User"}, pluck="parent")
-        for email in sorted(set(holders) - configured):
+        provisioned = {str(row.get("user")) for row in payload.get("existing_credentials") or []}
+        people = set(payload.get("people") or {})
+        for email in sorted((set(holders) & provisioned) - configured - people):
             if frappe.db.get_value("User", email, "enabled"):
                 user = frappe.get_doc("User", email)
                 user.enabled = 0

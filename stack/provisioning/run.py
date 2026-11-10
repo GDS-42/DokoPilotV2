@@ -42,15 +42,20 @@ STEPS: dict[str, tuple[str, str]] = {
     "demo-reset": ("demo_loader", "reset"),
 }
 
-SECRET_HINTS = ("password", "secret", "api_key", "token")
+SECRET_HINTS = ("password", "secret", "api_key", "token", "key")
 
 
-def secret_values(value: Any, key: str = "") -> list[str]:
+def secret_values(value: Any, key: str = "", inherited: bool = False) -> list[str]:
+    """Values of the payload that must never be printed: those under a key that names a
+    secret, at any depth. « provider_keys: {mistral: "..."} » holds a secret under a key
+    that does not look like one: the hint of the enclosing key is inherited (for values of
+    8 characters or more, so that a short ordinary word is not masked everywhere)."""
+    hinted = any(hint in key.lower() for hint in SECRET_HINTS)
     if isinstance(value, dict):
-        return [s for k, v in value.items() for s in secret_values(v, k)]
+        return [s for k, v in value.items() for s in secret_values(v, str(k), inherited or hinted)]
     if isinstance(value, list):
-        return [s for item in value for s in secret_values(item, key)]
-    if isinstance(value, str) and len(value) >= 4 and any(hint in key.lower() for hint in SECRET_HINTS):
+        return [s for item in value for s in secret_values(item, key, inherited)]
+    if isinstance(value, str) and ((hinted and len(value) >= 4) or (inherited and len(value) >= 8)):
         return [value]
     return []
 
