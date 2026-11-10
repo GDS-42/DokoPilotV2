@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A prefix shorter than the private range covers public addresses: 10.0.0.0/1 is half of
+# the Internet although it starts like a private range.
+# expect: Exposition réseau invalide
+# expect: refusé : 10.0.0.0/1
+network: { mode: lan, lan: { allowed_cidrs: ["192.168.1.0/24", "10.0.0.0/1"] } }

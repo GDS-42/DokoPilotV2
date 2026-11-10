@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A restic backend that names this server (local:, or sftp and rest to localhost) is not off-site.
+# expect: un dépôt de sauvegarde distant et réel
+profile: production
+client: { siren: "123456789" }
+network: { mode: tailscale }
+backup: { repository: "sftp:sauvegarde@localhost:/srv/restic" }

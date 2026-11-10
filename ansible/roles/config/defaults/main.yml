@@ -155,8 +155,16 @@ dokopilot_model_regex: '^[a-z0-9][a-z0-9._-]*/[^\s/]\S*$'
 dokopilot_ssh_key_regex: >-
   ^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com|ssh-rsa) [A-Za-z0-9+/=]{40,}
 
-# Private ranges accepted for network.lan.allowed_cidrs: RFC 1918, CGNAT (Tailscale), IPv6 ULA.
-dokopilot_private_cidr_regex: '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|f[cd][0-9a-f]{2}:)'
+# network.lan.allowed_cidrs and maintenance.ssh_allowed_from are checked as networks by
+# filter_plugins/dokopilot_net.py (private ranges: RFC 1918, CGNAT of Tailscale, IPv6 ULA).
+
+# A machine name (labels of letters, digits and dashes, separated by dots) and a single label.
+dokopilot_hostname_regex: '^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+dokopilot_dns_label_regex: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+# A systemd calendar expression on one line (it is written into a timer unit).
+dokopilot_calendar_regex: '^[A-Za-z0-9*:,/.~ -]{1,100}$'
+# restic backends that store outside the server (a path or « local: » is this server).
+dokopilot_remote_backup_schemes: [s3, sftp, rest, b2, azure, gs, swift, rclone]
 
 # The Dokos frontend container publishes on 127.0.0.1 only, on this port; the reverse proxy
 # (Caddy in lan mode, tailscale serve in tailscale mode) forwards to it.

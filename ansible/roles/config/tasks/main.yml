@@ -262,17 +262,63 @@
     label: "{{ item.name | default('?') }}"
 
 - name: Check the network exposure
+  vars:
+    _not_private: "{{ dp.network.lan.allowed_cidrs | dokopilot_not_private_networks }}"
   ansible.builtin.assert:
     quiet: true
     that:
       - dp.network.mode in ['lan', 'tailscale']
       - dp.profile == 'demo' or dp.network.mode == 'tailscale'
       - dp.network.mode != 'lan' or dp.network.lan.allowed_cidrs | length > 0
-      - dp.network.mode != 'lan' or dp.network.lan.allowed_cidrs | select('match', dokopilot_private_cidr_regex) | list | length
-        == dp.network.lan.allowed_cidrs | length
+      - dp.network.mode != 'lan' or _not_private | length == 0
     fail_msg: >-
       Exposition réseau invalide : en production, Dokos n'est joignable que par Tailscale
-      (network.mode: tailscale). Le mode lan est réservé au profil demo et à des réseaux privés.
+      (network.mode: tailscale). Le mode lan est réservé au profil demo et à des réseaux privés :
+      chaque entrée de network.lan.allowed_cidrs est une plage entière (adresse/préfixe, une par
+      entrée) contenue dans 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 ou fc00::/7
+      {{ ('(refusé : ' ~ _not_private | join(', ') ~ ')') if _not_private | length > 0 and dp.network.mode == 'lan' else '' }}.
+
+- name: Check the addresses allowed to reach the maintenance port
+  vars:
+    _not_networks: "{{ dp.maintenance.ssh_allowed_from | dokopilot_not_networks }}"
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _not_networks | length == 0
+    fail_msg: >-
+      maintenance.ssh_allowed_from invalide ({{ _not_networks | join(', ') }}) : chaque entrée est
+      une adresse ou une plage (adresse/préfixe, une par entrée, sans bit d'hôte : 203.0.113.0/24).
+      Pour autoriser toutes les adresses, laissez la liste vide.
+
+- name: Check the names and the ports written into the system
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.server.ssh_port | string is match('^[0-9]{1,5}$') and dp.server.ssh_port | int >= 1 and dp.server.ssh_port | int <= 65535
+      - dp.server.hostname is string and dp.server.hostname is match(dokopilot_hostname_regex)
+      - dp.network.tailscale.hostname is string and dp.network.tailscale.hostname is match(dokopilot_dns_label_regex)
+      - dp.dokos.site_name is string and dp.dokos.site_name is match(dokopilot_hostname_regex)
+      - dp.client.company_name is string and dp.client.company_name is not search('[\\x00-\\x1f\\x7f]')
+      - dp.maintenance.sudo_requires_password is boolean
+    fail_msg: >-
+      Réglages invalides : server.ssh_port est un nombre de 1 à 65535 ; server.hostname et
+      dokos.site_name sont des noms de machine (lettres minuscules, chiffres, tirets, points) ;
+      network.tailscale.hostname est un nom simple, sans point ; client.company_name tient sur
+      une ligne ; maintenance.sudo_requires_password vaut true ou false.
+
+- name: Check the backup settings
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.backup.repository is string
+      - dp.backup.schedule is string and dp.backup.schedule is match(dokopilot_calendar_regex)
+      - dp.backup.keep.daily | string is match('^[0-9]{1,4}$') and dp.backup.keep.daily | int >= 1
+      - dp.backup.keep.weekly | string is match('^[0-9]{1,4}$')
+      - dp.backup.keep.monthly | string is match('^[0-9]{1,4}$')
+    fail_msg: >-
+      Réglages de sauvegarde invalides : backup.schedule est un horaire systemd sur une ligne
+      (ex. "*-*-* 02:30:00") ; backup.keep.daily est un nombre d'au moins 1, backup.keep.weekly
+      et backup.keep.monthly des nombres positifs ou nuls.
 
 - name: Check the business settings
   ansible.builtin.assert:
@@ -301,12 +347,17 @@
     quiet: true
     that:
       - not dp.demo.load_test_data
-      - dp.backup.repository is match('^[a-z0-9]+:')
+      - dp.backup.repository is match('^(' ~ dokopilot_remote_backup_schemes | join('|') ~ '):')
       - dp.backup.repository is not search('\\.(invalid|example)(/|:|$)')
+      - dp.backup.repository is not search('^(sftp|rest):(https?://|//)?([^/@]*@)?(localhost|127\\.|\\[?::1)')
+      - dp.maintenance.sudo_requires_password
     fail_msg: >-
-      En production : aucune donnée de test (demo.load_test_data: false) et un dépôt de
-      sauvegarde distant et réel (backup.repository de la forme s3:…, sftp:…, rest:…, pas
-      l'exemple « s3.example.invalid »), car une sauvegarde sur le même serveur n'en est pas une.
+      En production : aucune donnée de test (demo.load_test_data: false) ; un dépôt de
+      sauvegarde distant et réel (backup.repository de la forme
+      {{ dokopilot_remote_backup_schemes | map('regex_replace', '$', ':…') | join(', ') }}, pas un dossier de ce
+      serveur ni l'exemple « s3.example.invalid »), car une sauvegarde sur le même serveur n'en
+      est pas une ; et sudo avec mot de passe (maintenance.sudo_requires_password: true), pour
+      qu'une clé SSH volée ne donne pas à elle seule les droits root.
   when: dp.profile == 'production'
 
 - name: Check that the required secrets are present

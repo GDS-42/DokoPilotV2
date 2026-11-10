@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The addresses allowed on the maintenance port are real ranges, one per entry.
+# expect: maintenance.ssh_allowed_from invalide (192.0.2.0/24 or 0.0.0.0/0)
+maintenance: { ssh_allowed_from: ["192.0.2.0/24 or 0.0.0.0/0"] }

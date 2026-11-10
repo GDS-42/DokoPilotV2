@@ -217,7 +217,7 @@ check_system() {
 		blocker "sudo est absent. En root (su -), installez-le et donnez-vous le droit de l'utiliser : $(sudo_hint), puis reconnectez-vous."
 	elif sudo -n true 2>/dev/null; then
 		ok "sudo : disponible"
-	elif id -nG | tr ' ' '\n' | grep -Eqx 'sudo|wheel|admin'; then
+	elif id -nG | tr ' ' '\n' | grep -Eqx 'sudo|wheel|admin|dokopilot-maint'; then
 		ok "sudo : disponible (votre mot de passe sera demandé)"
 	else
 		warn "sudo : votre compte ne semble pas autorisé (groupe sudo ou wheel). Si l'installation échoue sur sudo : $(sudo_hint)."
@@ -450,11 +450,16 @@ fetch_repository() {
 		"$(printf '%s' "$repo_url" | tr '[:upper:]' '[:lower:]')" | *dokopilotv2*) ;;
 		*) die "« $dir » est une copie d'un autre dépôt (${origin:-sans origine}) : choisissez un autre dossier avec --dir." ;;
 		esac
+		if [ -n "$(git -C "$dir" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+			# Never mix a version with local changes without saying so: the copy is kept as it is.
+			warn "« $dir » contient des fichiers modifiés (git -C $dir status) : la copie reste telle quelle, à $(git -C "$dir" describe --tags --always 2>/dev/null), et n'est pas passée à la version $version. Annulez ces modifications, ou choisissez un autre dossier avec --dir, pour installer la version $version."
+			return 0
+		fi
 		say "  Copie existante dans $dir : passage à la version $version."
 		git -C "$dir" fetch --quiet --depth 1 origin "$version" </dev/null ||
 			die "impossible de récupérer la version $version depuis $origin."
 		git -C "$dir" -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD </dev/null ||
-			die "impossible de passer à la version $version : le dossier contient des modifications locales (voir « git -C $dir status »)."
+			die "impossible de passer à la version $version (voir « git -C $dir status »)."
 	elif [ -e "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
 		die "« $dir » existe déjà et n'est pas une copie de DokoPilot : choisissez un autre dossier avec --dir."
 	else

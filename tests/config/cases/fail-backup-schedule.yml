@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The schedule is written into a systemd timer: one line, calendar characters only.
+# expect: Réglages de sauvegarde invalides
+backup: { schedule: "daily\nOnCalendar=minutely" }
