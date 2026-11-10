@@ -14,6 +14,14 @@ dokopilot_forgejo_backup_dir: /var/lib/dokopilot/forgejo-backups
 
 # restic settings (RESTIC_REPOSITORY, RESTIC_PASSWORD, secrets.restic_env), root only.
 backup_env_file: "{{ dokopilot_etc_dir }}/restic.env"
+# Identifier of this installation, created by the first backup: its snapshots carry the tag
+# install:<id>, so that another server on the same repository never prunes them.
+backup_install_id_file: "{{ dokopilot_etc_dir }}/install-id"
+# Date of the last complete backup, written by the backup script and read by check.yml
+# (playbooks/tasks/host-checks.yml uses the same default path).
+backup_stamp_file: "{{ dokopilot_bench_backup_dir | dirname }}/last-backup"
+# One backup or restore at a time.
+backup_lock_file: /run/lock/dokopilot-backup.lock
 backup_script: /usr/local/sbin/dokopilot-backup
 restore_script: /usr/local/sbin/dokopilot-restore
 backup_unit_name: dokopilot-backup
@@ -27,3 +35,9 @@ backup_enable_timer: true
 # Seconds the timer may delay the start, so that several servers do not hit the same
 # repository at once.
 backup_randomized_delay: 900
+# A backup that has not ended after this long is stopped (a hung upload would otherwise hold
+# the lock, and every later run would be refused).
+backup_timeout: 6h
+# `check` fails when the last successful backup is older than this many hours (a daily
+# schedule plus its delay and a margin).
+backup_max_age_hours: 36

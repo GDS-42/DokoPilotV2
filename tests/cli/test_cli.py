@@ -204,6 +204,20 @@ class CliTest(unittest.TestCase):
         self.assertIn("Personne « inconnu foo=bar » inconnue", err.getvalue())
         self.assertIn("(camille, lucas)", err.getvalue())
 
+    def test_restore_options_reach_the_playbook(self) -> None:
+        self.init_client()
+        cli = self.in_process()
+        calls: list[tuple[str, list[str]]] = []
+        cli.ansible_playbook = lambda client, playbook, ns, bootstrap=False, extra=None: calls.append((playbook, extra or [])) or 0
+        self.assertEqual(cli.main(["restore", "acme", "--confirm", "--forgejo", "--no-pre-backup", "--snapshot", "1a2b3c4d"]), 0)
+        playbook, extra = calls[0]
+        self.assertEqual(playbook, "restore.yml")
+        self.assertEqual(json.loads(extra[1]), {"restore_snapshot": "1a2b3c4d", "restore_confirmed": True,
+                                                "restore_forgejo": True, "restore_no_pre_backup": True})
+        # Without --confirm nothing is confirmed on the person's behalf.
+        self.assertEqual(cli.main(["restore", "acme"]), 0)
+        self.assertEqual(json.loads(calls[1][1][1]), {"restore_snapshot": "latest"})
+
     def camille(self) -> list[dict]:
         example = yaml.safe_load((REPO / "config" / "client.example.yml").read_text(encoding="utf-8"))
         return example["users"]["people"]

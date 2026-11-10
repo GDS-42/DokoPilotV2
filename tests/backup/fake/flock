@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The lock file of the scripts is under /run/lock; the test takes no system-wide lock.
+exit 0

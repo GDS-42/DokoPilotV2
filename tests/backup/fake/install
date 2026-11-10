@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# `install -d` without the owner and group (tests/backup/run.sh runs without root).
+args=()
+while (( $# > 0 )); do
+  case "$1" in
+    -o | -g) shift ;;
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+exec /usr/bin/install "${args[@]}"

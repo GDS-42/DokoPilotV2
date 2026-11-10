@@ -599,6 +599,10 @@ def cmd_playbook(playbook: str, *, bootstrap: bool = False) -> Any:
             variables["harness_dest"] = str(Path(args.dest).expanduser().resolve())
         if getattr(args, "confirm", False):
             variables["restore_confirmed"] = True
+        if getattr(args, "forgejo", False):
+            variables["restore_forgejo"] = True
+        if getattr(args, "no_pre_backup", False):
+            variables["restore_no_pre_backup"] = True
         if hasattr(args, "person"):
             variables["dokopilot_person"] = person_for(client_settings(args.client), args.person)["id"]
         extra = ["-e", json.dumps(variables)] if variables else []
@@ -978,9 +982,12 @@ def parser() -> argparse.ArgumentParser:
     sp = with_common(sub.add_parser("backup", help="lancer une sauvegarde maintenant"))
     sp.set_defaults(func=cmd_playbook("backup.yml"))
 
-    sp = with_common(sub.add_parser("restore", help="restaurer une sauvegarde (écrase le site)"))
-    sp.add_argument("--snapshot", default="latest", help="instantané restic (par défaut : le plus récent)")
+    sp = with_common(sub.add_parser("restore", help="restaurer une sauvegarde (écrase le site, ou Forgejo avec --forgejo)"))
+    sp.add_argument("--snapshot", default="latest", help="instantané restic (par défaut : le dernier de cette installation)")
     sp.add_argument("--confirm", action="store_true", help="confirmer l'écrasement des données actuelles")
+    sp.add_argument("--forgejo", action="store_true", help="restaurer les dépôts de contexte et les comptes de Forgejo, pas Dokos")
+    sp.add_argument("--no-pre-backup", action="store_true",
+                    help="ne pas sauvegarder l'état actuel avant de l'écraser (quand il est perdu ou illisible)")
     sp.set_defaults(func=cmd_playbook("restore.yml"))
 
     sp = with_common(sub.add_parser("demo-reset", help="recharger les données de test (profil demo)"))

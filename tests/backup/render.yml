@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Renders the backup and restore scripts of the backup role into a test directory
+# (tests/backup/run.sh), with the role's own defaults and the paths of the test.
+- name: Render the backup scripts for the test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../../ansible/roles/backup/defaults/main.yml
+  vars:
+    dp:
+      dokos: { site_name: test.dokopilot.internal }
+      context: { enabled: true }
+      backup: { keep: { daily: 7, weekly: 4, monthly: 12 } }
+  tasks:
+    - name: Render the scripts
+      ansible.builtin.template:
+        src: "../../ansible/roles/backup/templates/{{ item }}.sh.j2"
+        dest: "{{ test_root }}/sbin/{{ item }}"
+        mode: "0755"
+      loop:
+        - dokopilot-backup
+        - dokopilot-restore
