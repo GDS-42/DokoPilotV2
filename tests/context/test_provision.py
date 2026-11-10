@@ -124,6 +124,115 @@ class LoginTest(unittest.TestCase):
         self.assertIn("injoignable", result["msg"])
 
 
+class FakeApi:
+    """Records the calls of the provisioning functions; answers from canned users and tokens."""
+
+    def __init__(self, users: dict[str, dict[str, Any]], tokens: dict[str, list[dict[str, Any]]] | None = None,
+                 refuse: tuple[str, ...] = ()) -> None:
+        self.users, self.tokens, self.refuse = users, tokens or {}, refuse
+        self.calls: list[tuple[str, str, Any]] = []
+
+    def get(self, path: str, missing_ok: bool = False) -> Any:
+        return self.users.get(path.removeprefix("/users/"))
+
+    def paged(self, path: str) -> list[Any]:
+        if "paged" in self.refuse:
+            raise provision.Failure("Forgejo a refusé GET (401)")
+        return list(self.tokens.get(path.split("/")[2], []))
+
+    def call(self, method: str, path: str, body: Any = None, ok: tuple[int, ...] = (200,), **_: Any) -> tuple[int, Any]:
+        self.calls.append((method, path, body))
+        if method in self.refuse:
+            raise provision.Failure(f"Forgejo a refusé {method} {path} (500)")
+        return 200, {"login": "dokopilot-admin", "is_admin": True}
+
+
+class RemovedAndPromotedAccountsTest(unittest.TestCase):
+    def model(self, *people: dict[str, Any]) -> dict[str, Any]:
+        return provision.complete(payload(*people))
+
+    def test_a_removed_account_loses_every_token_and_its_password(self) -> None:
+        api = FakeApi({"marie": {"login": "marie", "prohibit_login": False}},
+                      {"marie": [{"id": 7, "name": "dokopilot"}, {"id": 8, "name": "créé dans l'interface web"}]})
+        run = provision.Run()
+        model = self.model()
+        self.assertEqual(provision.disable_removed(model, api, run, {"marie"}), ["marie"])
+        patches = [body for method, path, body in api.calls if method == "PATCH" and path == "/admin/users/marie"]
+        self.assertEqual(len(patches), 1)
+        self.assertTrue(patches[0]["prohibit_login"])
+        # A random password nobody keeps: the one the person knew no longer opens anything.
+        self.assertGreaterEqual(len(patches[0]["password"]), model["password_length"])
+        deleted = sorted(path for method, path, _ in api.calls if method == "DELETE")
+        self.assertEqual(deleted, ["/users/marie/tokens/7", "/users/marie/tokens/8"])
+
+    def test_a_configured_account_is_never_a_site_administrator(self) -> None:
+        model = self.model(person("lucas"))
+        account = next(a for a in model["accounts"] if a["user"] == "lucas")
+        current = {"email": account["email"], "full_name": account["full_name"], "restricted": account["restricted"],
+                   "prohibit_login": False, "active": True, "is_admin": True}
+        users = {a["user"]: {"email": a["email"], "full_name": a["full_name"], "restricted": a["restricted"],
+                             "prohibit_login": False, "active": True} for a in model["accounts"]}
+        users["lucas"] = current
+        api, run = FakeApi(users), provision.Run()
+        provision.ensure_accounts(model, api, run)
+        self.assertEqual([(m, p, b["admin"]) for m, p, b in api.calls], [("PATCH", "/admin/users/lucas", False)])
+        self.assertIn("droits d'administration de Forgejo retirés", run.changes[0])
+
+    def test_a_reactivated_account_is_pointed_out(self) -> None:
+        model = self.model(person("marie"))
+        users = {a["user"]: {"email": a["email"], "full_name": a["full_name"], "restricted": a["restricted"],
+                             "prohibit_login": a["user"] == "marie", "active": True} for a in model["accounts"]}
+        api, run = FakeApi(users), provision.Run()
+        provision.ensure_accounts(model, api, run)
+        self.assertEqual(len(run.changes), 1)
+        self.assertIn("RÉACTIVÉ", run.changes[0])
+        self.assertIn("choisissez un autre id", run.changes[0])
+
+    def test_the_organisation_name_is_not_a_reserved_name(self) -> None:
+        reserved = payload()
+        reserved["org"]["name"] = "api"
+        with self.assertRaises(provision.Failure) as caught:
+            provision.complete(reserved)
+        self.assertIn("ne peut pas nommer l'organisation", str(caught.exception))
+
+
+class AdminBootstrapTest(unittest.TestCase):
+    """The administration token minted to set the administrator's password is deleted even
+    when the call that uses it fails; a token left by an earlier failure is deleted too."""
+
+    def bootstrap(self, api: FakeApi) -> None:
+        answers = iter(["ID Username\n1 dokopilot-admin\n", "jeton-d-administration\n"])
+        original = provision.compose
+        provision.compose = lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=next(answers), stderr="")
+        self.addCleanup(setattr, provision, "compose", original)
+        api.call = self.first_login_refused(api)  # type: ignore[method-assign]
+        provision.ensure_admin(provision.complete(payload()), api, provision.Run())
+
+    @staticmethod
+    def first_login_refused(api: FakeApi):  # noqa: ANN205
+        inner, seen = api.call, []
+
+        def call(method: str, path: str, body: Any = None, ok: tuple[int, ...] = (200,), **extra: Any) -> tuple[int, Any]:
+            if (method, path) == ("GET", "/user") and not seen:
+                seen.append(True)
+                api.calls.append((method, path, body))
+                return 401, None  # the password of the secrets is not the current one yet
+            return inner(method, path, body, ok, **extra)
+
+        return call
+
+    def test_the_token_is_deleted_after_use(self) -> None:
+        api = FakeApi({}, {"dokopilot-admin": [{"id": 3, "name": "dokopilot-bootstrap-ancien"}, {"id": 4, "name": "autre"}]})
+        self.bootstrap(api)
+        self.assertEqual([path for method, path, _ in api.calls if method == "DELETE"], ["/users/dokopilot-admin/tokens/3"])
+
+    def test_the_token_is_deleted_when_the_update_fails(self) -> None:
+        api = FakeApi({}, {"dokopilot-admin": [{"id": 5, "name": "dokopilot-bootstrap-0a1b2c3d"}]}, refuse=("PATCH",))
+        with self.assertRaises(provision.Failure):
+            self.bootstrap(api)
+        self.assertEqual([path for method, path, _ in api.calls if method == "DELETE"], ["/users/dokopilot-admin/tokens/5"])
+
+
 class ProtectionTest(unittest.TestCase):
     def test_pushing_stays_open_and_no_file_is_protected(self) -> None:
         self.assertIs(provision.PROTECTION["enable_push"], True)

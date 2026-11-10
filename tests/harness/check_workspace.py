@@ -255,6 +255,12 @@ def check_opencode(args: argparse.Namespace, ws: Path, cfg: Path) -> None:
             "git remote set-url origin http://example.test/x.git", "git -C perso config core.hooksPath x", "opencode debug config")],
         *[(a, "edit", ".opencode/plugins/dokopilot-guard.js", "deny") for a in every],
         *[(a, "edit", "opencode.json", "deny") for a in every],
+        # Files that steer the agents cannot be planted in a sub-folder, the free-write ones included.
+        *[(a, "edit", f, "deny") for a in every for f in (
+            "perso/.claude/skills/x/SKILL.md", "perso/CLAUDE.local.md", "perso/opencode.json", "perso/.mcp.json",
+            "00-Boite-de-reception/.opencode/agents/x.md", "00-Boite-de-reception/import/CLAUDE.md", "CLAUDE.local.md",
+            "opencode.jsonc", "perso/.agents/skills/x/SKILL.md")],
+        *[(a, shell, c, "deny") for a in every for c in ("git replace abc def", "git send-pack origin main")],
         *[(a, "webfetch", "*", "ask") for a in every],
         ("bureau", shell, "ls -la", "ask"),
         ("bureau", shell, "git commit -m 'Ajoute une note'", "ask"),
@@ -304,7 +310,9 @@ def check_claude(args: argparse.Namespace, ws: Path, cfg: Path) -> None:
         for rule in ("Read(~/.config/dokopilot/**)", "Edit(~/.config/dokopilot/**)", "Edit(/.claude/**)", "Edit(/.mcp.json)",
                      "Bash(opencode *)", "Bash(git push*)", "Bash(git -C * push*)", "Bash(*git*credential*)", "Bash(git config*)",
                      "Bash(git remote*)", "Bash(*git-credentials*)", "Bash(*model-api-key*)", "Edit(/.git/**)", "Edit(/**/.git/**)",
-                     "Edit(/.agents/skills/dokopilot-*/**)", "Edit(/CLAUDE.md)"):
+                     "Edit(/.agents/skills/dokopilot-*/**)", "Edit(/CLAUDE.md)", "Edit(/**/CLAUDE.local.md)", "Edit(/**/.mcp.json)",
+                     "Edit(/**/opencode.json)", "Edit(/*/**/.claude/**)", "Edit(/*/**/.opencode/**)", "Edit(/*/**/.agents/**)",
+                     "Bash(git replace*)", "Bash(git send-pack*)"):
             check(rule in deny, f"settings.json: {rule} not denied")
         check("Edit(/.agents/**)" not in deny, "settings.json: the company's skills cannot be edited at all")
         for rule in ("Edit(/00-Boite-de-reception/**)", "Edit(/perso/**)"):

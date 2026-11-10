@@ -341,6 +341,10 @@ if [[ -f "$hook" ]]; then
   "$venv_python" -c 'import json,sys; p=json.load(open(sys.argv[1])); p.pop("free_write_dirs"); json.dump(p, open(sys.argv[2], "w"))' \
     "$policy" "$work/old-policy.json"
   hook_case "policy without free-write folders is blocked" block "$(pre s-fresh atelier Read '{}')" "$work/old-policy.json"
+  # A policy of the wrong shape blocks (exit 2, on every version of Claude Code).
+  "$venv_python" -c 'import json,sys; p=json.load(open(sys.argv[1])); p["safe_tools"] = 7; json.dump(p, open(sys.argv[2], "w"))' \
+    "$policy" "$work/odd-policy.json"
+  hook_case "a policy of the wrong shape is blocked" block "$(pre s-fresh atelier Bash '{"command": "ls"}')" "$work/odd-policy.json"
 
   token="$("$hook_python" "$ws/.claude/hooks/dokos_headers.py" "$cfg/dokos-token")"
   if [[ "$token" == '{"Authorization": "token fakeapikey0123456789:fakeapisecret9876543210"}' ]]; then

@@ -221,6 +221,20 @@ harness_oc_protect_rules:
   - { action: edit, resource: ".mcp.json", effect: deny }
   - { action: edit, resource: "CLAUDE.md", effect: deny }
   - { action: edit, resource: "*/CLAUDE.md", effect: deny }
+  # The same files in a sub-folder, the free-write folders included: the harnesses load the
+  # rules, skills and settings of a folder as soon as one of its files is read, so a file
+  # planted once in perso/ would steer every later session.
+  - { action: edit, resource: "CLAUDE.local.md", effect: deny }
+  - { action: edit, resource: "*/CLAUDE.local.md", effect: deny }
+  - { action: edit, resource: "opencode.jsonc", effect: deny }
+  - { action: edit, resource: "*/opencode.json", effect: deny }
+  - { action: edit, resource: "*/opencode.jsonc", effect: deny }
+  - { action: edit, resource: "*/.opencode/*", effect: deny }
+  - { action: edit, resource: "*/.claude/*", effect: deny }
+  - { action: edit, resource: "*/.mcp.json", effect: deny }
+  - { action: edit, resource: "*/.agents/*", effect: deny }
+  - { action: shell, resource: "*git replace*", effect: deny }
+  - { action: shell, resource: "*git send-pack*", effect: deny }
   - { action: edit, resource: "AGENTS.md", effect: ask }
   - { action: edit, resource: "*/AGENTS.md", effect: ask }
 
@@ -314,6 +328,16 @@ harness_claude_protect_rules:
   - Edit(/.agents/skills/dokopilot-*/**)
   - Edit(/CLAUDE.md)
   - Edit(/**/CLAUDE.md)
+  # The same files in a sub-folder, the free-write folders included (see the opencode rules).
+  - Edit(/**/CLAUDE.local.md)
+  - Edit(/**/opencode.json)
+  - Edit(/**/opencode.jsonc)
+  - Edit(/**/.mcp.json)
+  - Edit(/*/**/.claude/**)
+  - Edit(/*/**/.opencode/**)
+  - Edit(/*/**/.agents/**)
+  - Bash(git replace*)
+  - Bash(git send-pack*)
 # Paths the Bash sandbox of Claude Code cannot write, relative to the workspace (the private
 # folder ~/.config/dokopilot is added, and also denied for reading).
 harness_claude_sandbox_deny_write:
@@ -325,14 +349,26 @@ harness_claude_sandbox_deny_write:
   - ./.claude
   - ./AGENTS.md
   - ./CLAUDE.md
+  - ./CLAUDE.local.md
+  - ./opencode.jsonc
   - ./.git/config
   - ./.git/hooks
   - ./perso/AGENTS.md
   - ./perso/CLAUDE.md
+  - ./perso/CLAUDE.local.md
+  - ./perso/.claude
+  - ./perso/.opencode
+  - ./perso/.mcp.json
+  - ./perso/opencode.json
   - ./perso/.git/config
   - ./perso/.git/hooks
   - ./direction/AGENTS.md
   - ./direction/CLAUDE.md
+  - ./direction/CLAUDE.local.md
+  - ./direction/.claude
+  - ./direction/.opencode
+  - ./direction/.mcp.json
+  - ./direction/opencode.json
   - ./direction/.git/config
   - ./direction/.git/hooks
 
