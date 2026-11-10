@@ -486,18 +486,23 @@ def cmd_doctor(_: argparse.Namespace) -> int:
         ("age", bool(shutil.which("age"))),
         ("age-keygen", bool(shutil.which("age-keygen"))),
         ("ssh", bool(shutil.which("ssh"))),
-        ("clé SSH (~/.ssh/id_ed25519.pub)", (Path.home() / ".ssh" / "id_ed25519.pub").exists()),
     ]
     for label, passed in checks:
         print(f"{'✓' if passed else '✗'} {label}")
         ok = ok and passed
+    # The keys are created on demand: their absence is said, not counted as a missing tool
+    # (`make setup` ends with this command, just before the assistant that creates them).
+    if (Path.home() / ".ssh" / "id_ed25519.pub").exists():
+        print("✓ clé SSH (~/.ssh/id_ed25519.pub)")
+    else:
+        print("· clé SSH (~/.ssh/id_ed25519.pub) : absente ; l'assistant d'installation la crée, ou « ssh-keygen -t ed25519 »")
     if identity_path().exists():
         print(f"✓ clé age ({identity_path()})")
     else:
         print(f"· clé age ({identity_path()}) : sera créée par « bin/dokopilot init »")
     if not ok:
         print("\nInstallez ce qui manque : Python 3.12 ou plus avec venv (Debian, Ubuntu : apt install python3-venv make),"
-              " « make setup » (Ansible), le paquet « age » de votre système, « ssh-keygen -t ed25519 » pour une clé SSH.")
+              " « make setup » (Ansible), le paquet « age » de votre système.")
     return 0 if ok else 1
 
 

@@ -405,9 +405,13 @@ check "copie du volume : base SQLite, app.ini et dépôts" equals \
   "$(tar -tf "$work/forgejo-data.tar" | grep -cE '^\./(data/gitea\.db|custom/conf/app\.ini|git/repositories/demo/entreprise\.git/HEAD)$')" 3
 until curl -fsS "$base/api/healthz" >/dev/null 2>&1; do sleep 1; done
 check "assistant-lucas pousse encore dans entreprise (après la copie)" can_push assistant-lucas "$work/clones/assistant-lucas-entreprise"
+# As dokopilot-restore --forgejo does it: the archive is readable by root only (the backup
+# script writes it with umask 077 in a 0700 folder), so it goes through standard input; the
+# account of the container could not open it as a mounted file.
+chmod 600 "$work/forgejo-data.tar"
 fcompose stop forgejo >/dev/null 2>&1
-fcompose run --rm --no-deps -T -v "$work/forgejo-data.tar:/backup/forgejo-data.tar:ro" --entrypoint sh forgejo \
-  -c 'find /var/lib/gitea -mindepth 1 -delete && tar -C /var/lib/gitea -xf /backup/forgejo-data.tar' 2>> "$work/volume.log"
+check "restauration : l'archive réservée à root passe par l'entrée standard" quietly fcompose run --rm --no-deps -T \
+  --entrypoint sh forgejo -c 'find /var/lib/gitea -mindepth 1 -delete && tar -C /var/lib/gitea -xf -' < "$work/forgejo-data.tar"
 fcompose start forgejo >/dev/null 2>&1
 until curl -fsS "$base/api/healthz" >/dev/null 2>&1; do sleep 1; done
 check "restauration : le dépôt revient à l'état de la copie" equals "$(commits entreprise)" "$before"
