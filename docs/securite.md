@@ -81,7 +81,8 @@ Quand le serveur est la machine où vous lancez le script (`server.local: true`)
   joignables en `http://localhost` et `http://localhost:3000` depuis la machine elle-même.
 - **L'agent tourne sur le serveur**, sous votre compte. Les fichiers de secrets du serveur
   (`/etc/dokopilot`, `.env`) restent lisibles par root seulement (sudo demande votre mot de
-  passe), avec une limite décrite plus bas (« Comptes du serveur et conteneurs ») ; la clé age
+  passe), et les données des conteneurs ne se lisent pas depuis votre compte (« Comptes du
+  serveur et conteneurs », plus bas) ; la clé age
   (`~/.config/dokopilot/age-identity.txt`), qui déchiffre tous les secrets du client, et les
   jetons sont dans `~/.config/dokopilot`, que le harnais refuse à l'agent, avec les limites
   décrites dans [poste-entrepreneur.md](poste-entrepreneur.md#6-risques-résiduels). sudo ne
@@ -237,17 +238,23 @@ contenu : ce qu'il envoie est ce que l'agent a commité, relisez-le
 
 ### Comptes du serveur et conteneurs
 
-Les conteneurs de Dokos et de Forgejo tournent sous l'identifiant 1000, sans espace de noms
-d'utilisateurs. Linux laisse un compte du serveur qui porte le même identifiant (uid et gid 1000 :
-en général le premier compte créé, donc souvent le premier compte de maintenance, ou votre compte
-en mode « tout sur cette machine ») lire les fichiers et l'environnement de ces processus par
-`/proc/<pid>/root` et `/proc/<pid>/environ`, sans sudo : base SQLite et dépôts de Forgejo,
-`site_config.json` de Dokos. Ce comportement a été reproduit avec Docker (un conteneur lancé avec
-un autre groupe que 1000 n'est plus lisible) ; il reste à corriger dans les piles Compose, avec
-les tests de la pile réelle. D'ici là : sur un serveur distant, n'ouvrez de session de
-maintenance qu'à des personnes à qui vous confieriez root ; en mode « tout sur cette machine »,
-l'agent tourne sous ce compte, et seul le bac à sable du harnais l'en sépare
-([poste-entrepreneur.md](poste-entrepreneur.md#6-risques-résiduels)).
+Linux laisse un processus lire les fichiers et l'environnement d'un autre par `/proc` quand ils
+ont le même utilisateur **et** le même groupe. Or le premier compte créé sur une machine porte en
+général l'identifiant 1000 (uid et gid), comme l'utilisateur des conteneurs : souvent le premier
+compte de maintenance, ou votre compte en mode « tout sur cette machine », sous lequel l'agent
+tourne.
+
+- **Forgejo** : l'image tourne sous 1000:1000. Sans précaution, un tel compte lisait sans sudo la
+  base, `app.ini` et tous les dépôts, `direction` compris (reproduit sur l'image réelle).
+  L'installation lance donc le conteneur avec un groupe principal que n'a aucun compte
+  (`dokopilot-ct`, groupe système sans membre), le groupe de l'image restant secondaire.
+- **Dokos** : l'image officielle tourne sous l'utilisateur 1000 avec le groupe `root` (0), que
+  n'a aucun compte ordinaire : rien à changer.
+
+Les tests de la pile réelle (`tests/context/run.sh`, `tests/stack/run.sh`) vérifient pour chaque
+conteneur qu'un processus d'uid et de gid 1000 ne lit ni ses fichiers ni son environnement. Il
+reste qu'un compte d'uid 1000 peut envoyer un signal à ces processus (les arrêter) : sur un
+serveur distant, n'ouvrez de session de maintenance qu'à des personnes de confiance.
 
 ## Poste et agents
 

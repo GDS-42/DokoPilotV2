@@ -37,7 +37,7 @@ if [[ $EUID -ne 0 ]]; then
   echo "Ce test installe un conteneur et écrit des fichiers root : lancez-le en root." >&2
   exit 2
 fi
-for tool in docker curl jq git ssh-keygen; do
+for tool in docker curl jq git ssh-keygen setpriv; do
   command -v "$tool" >/dev/null || { echo "Outil manquant : $tool" >&2; exit 2; }
 done
 [[ -x "$playbook_bin" ]] || { echo "ansible-playbook introuvable ($playbook_bin) : make setup" >&2; exit 2; }
@@ -59,6 +59,7 @@ cleanup() {
     return
   fi
   docker compose -p "$project" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  groupdel dokopilot-ct-context-test >/dev/null 2>&1 || true
   rm -rf "$prefix" "$work"
   exit "$code"
 }
@@ -136,6 +137,7 @@ overrides = {
     "dokopilot_etc_dir": f"{prefix}/etc",
     "dokopilot_forgejo_http_port": int(port),
     "dokopilot_forgejo_url": f"http://127.0.0.1:{port}/",
+    "dokopilot_container_group": "dokopilot-ct-context-test",
 }
 yaml.safe_dump(overrides, open(f"{work}/vars.yml", "w", encoding="utf-8"))
 # curl configuration with the administrator's login (never on a command line).
@@ -331,6 +333,26 @@ check "jeton de lucas : écriture des dépôts seulement, limité à ses dépôt
 check "jeton du compte de la dirigeante : entreprise, direction, perso-camille" equals \
   "$(api /users/camille/tokens | jq -r '.[] | select(.name == "dokopilot") | .repositories | map(.name) | sort | join(",")')" \
   "direction,entreprise,perso-camille"
+
+# --------------------------------------------------------------------------- 1b. the container and the accounts of the server
+
+# A process of this machine with uid and gid 1000 (the identity of the first account created
+# on most machines, and the user and group of the rootless Forgejo image): Linux lets it read
+# the files and the environment of a process of the same user AND group through /proc. The
+# container runs with a primary group no account has, so it reads nothing.
+as_first_account() { setpriv --reuid 1000 --regid 1000 --clear-groups "$@"; }
+shared=0
+for container in $(docker compose -p "$project" ps -q); do
+  name="$(docker inspect -f '{{.Name}}' "$container")"
+  pid="$(docker inspect -f '{{.State.Pid}}' "$container")"
+  if [[ "$(awk '/^Uid:/ { print $2 }' "/proc/$pid/status")" == 1000 ]]; then shared=$((shared + 1)); fi
+  if as_first_account cat "/proc/$pid/environ" >/dev/null 2>&1 || as_first_account ls "/proc/$pid/root/" >/dev/null 2>&1; then
+    fail "un compte d'uid 1000 lit l'environnement ou les fichiers de ${name#/}"
+  else
+    ok "un compte d'uid 1000 ne lit ni l'environnement ni les fichiers de ${name#/}"
+  fi
+done
+check "le contrôle porte sur un conteneur qui tourne bien sous l'uid 1000" equals "$shared" 1
 
 # --------------------------------------------------------------------------- 2. second run, checks
 

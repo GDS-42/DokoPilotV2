@@ -9,6 +9,9 @@
 dokopilot_forgejo_dir: /opt/dokopilot/forgejo
 dokopilot_forgejo_compose_project: dokopilot-forgejo
 dokopilot_etc_dir: /etc/dokopilot
+# System group that is the primary group of the containers' processes (same default in the
+# dokos and forgejo roles): it has no member and is no account's group.
+dokopilot_container_group: dokopilot-ct
 # The container publishes on 127.0.0.1 only, on this port.
 dokopilot_forgejo_http_port: 3001
 # Public ports: Caddy in lan mode, tailscale serve in tailscale mode.

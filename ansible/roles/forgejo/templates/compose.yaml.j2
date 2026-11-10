@@ -10,6 +10,10 @@ services:
   forgejo:
     image: {{ forgejo_image }}
     restart: unless-stopped
+    # The user of the rootless image, with a primary group no account of the server has
+    # (the image's own group stays supplementary): see tasks/main.yml.
+    user: "1000:{{ forgejo_container_gid }}"
+    group_add: ["1000"]
     security_opt:
       - no-new-privileges:true
     environment:

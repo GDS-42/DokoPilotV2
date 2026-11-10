@@ -318,9 +318,11 @@ ouvrez une nouvelle session.
   commandes. Avec opencode, qui n'a pas de bac à sable, une commande de l'Atelier peut les
   réécrire, comme tout programme lancé hors du harnais : `bin/dokopilot harness` les remet en
   place (l'ancien fichier est gardé en `.bak`).
-- **Un compte qui porte l'identifiant des conteneurs** (uid 1000) lit les fichiers de Dokos et de
-  Forgejo sur le serveur ; en mode « tout sur cette machine », c'est le compte sous lequel
-  l'agent tourne ([securite.md](securite.md#comptes-du-serveur-et-conteneurs)).
+- **Tout sur une seule machine : l'agent et les conteneurs.** Le compte sous lequel l'agent
+  tourne porte en général l'identifiant des conteneurs (uid 1000). Il ne peut pas lire leurs
+  fichiers ni leur environnement (les conteneurs ont un groupe qu'aucun compte n'a), mais une
+  commande de l'agent peut arrêter leurs processus
+  ([securite.md](securite.md#comptes-du-serveur-et-conteneurs)).
 - **Les modes sans question** : `opencode --auto` (OpenCode 1) approuve toutes les questions sauf
   les refus. Ne l'utilisez pas. Le mode « bypass » de Claude Code est désactivé par la
   configuration du projet.

@@ -28,7 +28,7 @@ if [[ $EUID -ne 0 ]]; then
   echo "Ce test installe une pile Docker et des paquets : lancez-le en root." >&2
   exit 2
 fi
-for tool in docker curl jq ssh-keygen; do
+for tool in docker curl jq ssh-keygen setpriv; do
   command -v "$tool" >/dev/null || { echo "Outil manquant : $tool" >&2; exit 2; }
 done
 if [[ -e "$prefix" ]]; then
@@ -193,6 +193,27 @@ check "5 factures électroniques reçues" equals "$(count eInvoice '[["einvoice_
 check "5 factures fournisseurs à traiter, créées par eTransactions" equals "$(count 'Supplier Invoice' '[["einvoice","is","set"]]')" 5
 check "factures reçues conformes EN 16931 (validation d'eTransactions)" equals "$(count eInvoice '[["einvoice_type","=","Incoming"],["e_invoice_is_correct","=",1]]')" 5
 check "aucune facture d'achat validée automatiquement" equals "$(count 'Purchase Invoice' '[["docstatus","=",1]]')" 1
+
+# --------------------------------------------------------------------------- 1b. the containers and the accounts of the server
+
+# A process of this machine with uid and gid 1000 (the identity of the first account created
+# on most machines, and the user of the Dokos containers): Linux would let it read the files
+# and the environment of a process of the same user AND group through /proc. The official
+# image runs as frappe (uid 1000) with the group root (gid 0), which no ordinary account
+# has, so it reads nothing; this check fails if a later image changes that.
+as_first_account() { setpriv --reuid 1000 --regid 1000 --clear-groups "$@"; }
+shared=0
+for container in $(docker compose -p "$project" ps -q); do
+  name="$(docker inspect -f '{{.Name}}' "$container")"
+  pid="$(docker inspect -f '{{.State.Pid}}' "$container")"
+  if [[ "$(awk '/^Uid:/ { print $2 }' "/proc/$pid/status")" == 1000 ]]; then shared=$((shared + 1)); fi
+  if as_first_account cat "/proc/$pid/environ" >/dev/null 2>&1 || as_first_account ls "/proc/$pid/root/" >/dev/null 2>&1; then
+    fail "un compte d'uid 1000 lit l'environnement ou les fichiers de ${name#/}"
+  else
+    ok "un compte d'uid 1000 ne lit ni l'environnement ni les fichiers de ${name#/}"
+  fi
+done
+check "le contrôle porte sur des conteneurs qui tournent bien sous l'uid 1000" at_least "$shared" 1
 
 # --------------------------------------------------------------------------- 2. assistant through MCP
 
