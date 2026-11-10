@@ -1,0 +1,54 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+---
+type: fonction
+statut: actif
+sensibilite: interne
+fonction: production
+projet: ""
+verifie: {{ context_date }}
+fraicheur: annuelle
+sources: []
+---
+# Fonction : Production
+
+## Mission
+
+Produire ou rendre ce qui a été vendu, dans les délais et avec la qualité promise, en gérant les matières, les stocks et le planning.
+
+Ce que recouvre en général cette fonction dans une petite entreprise, à adapter
+à l'entreprise :
+
+- le planning des commandes à réaliser
+- les matières, les fournitures et le stock
+- la qualité et les contrôles
+- l'entretien du matériel
+- la sécurité au poste de travail
+
+## Qui s'en occupe
+
+| Personne | Rôle dans la fonction |
+| --- | --- |
+| à compléter | à compléter |
+
+## Routines
+
+| Quand | Quoi | Où (Dokos, procédure) |
+| --- | --- | --- |
+| à compléter | à compléter | à compléter |
+
+## Données dans Dokos
+
+- articles et stocks : `Item`, `Warehouse` ; niveaux de stock par les rapports (`run_report`)
+- commandes à réaliser : `Sales Order` ; livraisons : `Delivery Note`
+- matières reçues : `Purchase Receipt`
+
+Voir [`60-Donnees/dokos.md`](../../60-Donnees/dokos.md) pour ce que l'agent peut lire et préparer.
+
+## Procédures
+
+- aucune procédure fournie : celles du métier s'écrivent ici, à partir du travail réel
+
+## Projets et décisions
+
+À compléter : liens vers les projets de `40-Projets/` et les décisions qui concernent cette
+fonction.

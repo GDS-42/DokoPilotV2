@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Réponses de l'assistant d'installation, pour une installation sans question :
+#
+#   sh install.sh --answers mes-reponses.yml
+#   .venv/bin/python installer/wizard.py --answers mes-reponses.yml   (depuis le dossier de DokoPilot)
+#
+# Les clés sont en anglais ; les valeurs s'écrivent comme vous les taperiez à la question
+# (numéro ou mot entre crochets pour un choix, oui ou non, texte). Une clé absente prend la
+# valeur proposée par défaut à la question ; s'il n'y en a pas, l'assistant s'arrête et
+# nomme la réponse manquante. Chaque réponse passe les mêmes contrôles qu'à la saisie.
+#
+# SECRETS : jamais dans ce fichier. Pour une clé ou un mot de passe <nom>, donnez
+#   <nom>_env: NOM_DE_VARIABLE   (variable d'environnement qui contient la valeur), ou
+#   <nom>_file: ~/chemin/fichier (fichier qui la contient).
+# L'assistant ne recopie jamais ces valeurs : la clé du modèle va dans
+# ~/.config/dokopilot/<id>/model-api-key (0600), la clé Tailscale et les identifiants de
+# sauvegarde dans les secrets chiffrés (secrets.yml.age), les mots de passe de messagerie
+# et d'agenda dans ~/.config/dokopilot/<id>/. Les mots de passe sudo sont demandés par
+# Ansible (« BECOME password ») au moment voulu : pour une installation sans terminal,
+# arrêtez-vous à la configuration (stop_after: config) et installez ensuite à la main.
+
+# Reprendre une installation commencée de ce client (clients/<id>/.assistant-etat.json) :
+# oui (défaut) ou non (tout recommencer).
+resume: oui
+
+# Pour les essais : s'arrêter après config, install ou harness (vide : aller jusqu'au bout).
+stop_after: ""
+
+# ---------------------------------------------------------------- 1. Où installer
+# local : tout sur cette machine (Debian 13 amd64) ; distant : un serveur piloté en SSH.
+where: distant
+
+# Serveur distant seulement :
+server:
+  address: 192.168.122.10       # adresse IP ou nom du serveur
+  ssh_port: 22
+  bootstrap_user: debian        # compte initial (hébergeur, installation de Debian), sert une fois
+maintenance_user: camille       # votre compte de maintenance sur le serveur (défaut : votre compte)
+ssh_public_key: ~/.ssh/id_ed25519.pub
+ssh_key_create: oui             # créer la clé si elle manque (sans phrase de passe)
+
+# Tout sur cette machine : votre compte devient le compte de maintenance. Les clés de
+# ~/.ssh/authorized_keys restent autorisées ; s'il n'y en a pas, ssh_public_key peut donner
+# la clé publique (texte ou fichier .pub) de l'ordinateur qui administrera la machine.
+
+# ---------------------------------------------------------------- 2. Démo ou production, agent
+profile: demo                   # demo | production
+client_id: atelier-demo         # minuscules, chiffres, tirets ; « demo » est réservé à l'exemple du dépôt
+harness: opencode               # opencode | claude-code | les-deux
+
+# ---------------------------------------------------------------- 3. Modèle d'IA
+models:
+  # anthropic, mistral, openai, openrouter, vercel, scaleway, ollama, ou autre (+ provider_id)
+  provider: anthropic
+  # provider_id: deepseek       # avec provider: autre
+  # provider_needs_key: oui     # avec provider: autre
+  # Modèles : « <modèle> » ou « <fournisseur>/<modèle> » ; absents = valeurs proposées
+  # (Anthropic : claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5).
+  bureau: claude-sonnet-5-5
+  atelier: claude-opus-5-5
+  small: claude-haiku-5-5
+  api_key_file: ~/cles/anthropic  # fichier qui contient la clé (ou api_key_env: NOM_DE_VARIABLE)
+claude_code_auth: abonnement    # avec Claude Code : abonnement | cle-api
+
+# ---------------------------------------------------------------- 4. Entreprise et personnes
+company:
+  name: "Atelier Démo"
+  abbr: AD
+  siren: ""                     # 9 chiffres, demandé en production
+# La première personne est le dirigeant ; les suivantes sont des membres.
+people:
+  - first_name: Camille
+    last_name: Martin
+    email: camille.martin@atelier-demo.test
+    id: camille                 # défaut : tiré du prénom
+    # Le dirigeant a toujours un assistant : c'est l'identité de son agent.
+  - first_name: Lucas
+    last_name: Bernard
+    email: lucas.bernard@atelier-demo.test
+    assistant: oui              # en version 0.2 : un compte Forgejo, pas d'accès à Dokos
+
+# ---------------------------------------------------------------- 5. Réseau, messagerie, agenda, import
+network: lan                    # lan | tailscale (toujours tailscale en production)
+# tailscale_auth_key_env: TS_AUTHKEY
+backup:                         # production seulement
+  repository: ""                # ex. s3:https://s3.fr-par.scw.cloud/mon-compartiment/dokopilot
+  # s3_access_key_id_env: AWS_ACCESS_KEY_ID
+  # s3_secret_access_key_env: AWS_SECRET_ACCESS_KEY
+mail:
+  enabled: non
+  # imap_host: imap.exemple.fr
+  # imap_port: 993
+  # imap_tls: ssl               # ssl | starttls
+  # username: camille.martin@exemple.fr
+  # email: camille.martin@exemple.fr
+  # password_env: MAIL_PASSWORD
+calendar:
+  enabled: non
+  # caldav_url: https://agenda.exemple.fr/dav/
+  # username: camille.martin@exemple.fr
+  # password_env: CALDAV_PASSWORD
+import_path: ""                 # dossier à importer dans la boîte de réception (ex. ~/Obsidian/Atelier)

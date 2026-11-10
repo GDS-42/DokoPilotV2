@@ -1,0 +1,38 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{%- set name = (person.first_name ~ ' ' ~ person.last_name) | trim -%}
+{%- set assistant = forgejo_assistant_prefix ~ person.id %}
+# Consignes personnelles — {{ name }}
+
+Vous assistez **{{ name }}** ({{ 'dirigeant' if person.role == 'dirigeant' else 'membre' }} de l'entreprise {{ context_company }}).
+Ce dépôt, `{{ context_org }}/perso-{{ person.id }}`, est le sien : seuls {{ person.first_name }}
+{%- if person.assistant | default(false) %} et son assistant (`{{ assistant }}`){% endif %} y ont accès.
+Les consignes communes (`../AGENTS.md`) s'appliquent toutes ; ce fichier les précise pour
+{{ person.first_name }}.
+
+## Qui
+
+| Élément | Valeur |
+| --- | --- |
+| Personne | {{ name }} ({{ 'dirigeant' if person.role == 'dirigeant' else 'membre' }}) |
+| Compte | `{{ person.id }}` |
+| Assistant | {{ ('`' ~ assistant ~ '`, auteur des commits « Assistant de ' ~ person.first_name ~ ' »') if person.assistant | default(false) else 'aucun' }} |
+| Accès | dépôts `entreprise`{{ ', `direction`' if person.role == 'dirigeant' and dp.context.direction | bool else '' }} et `perso-{{ person.id }}`{{ ' ; Dokos par le serveur MCP `dokos` (brouillons seulement)' if person.role == 'dirigeant' and person.assistant | default(false) else " ; pas d'accès de l'agent à Dokos" }} |
+
+## Préférences
+
+À compléter par {{ person.first_name }} (ou par l'agent, sur sa demande) : ce qui rend le travail
+plus simple au quotidien.
+
+- Forme d'adresse : vouvoiement (à changer ici si {{ person.first_name }} préfère le tutoiement).
+- Longueur des réponses : à compléter (par exemple : courtes, l'essentiel d'abord).
+- Fonctions tenues dans l'entreprise : à compléter (voir `../50-Fonctions/`).
+- Habitudes de travail : à compléter (moments de la semaine, priorités, ce qu'il faut toujours
+  vérifier avec {{ person.first_name }}).
+- À éviter : à compléter.
+
+## Mémoire
+
+- `memoire-vive.md` : 500 mots au plus, ce qui est en cours et ce qu'il faut retenir pour la
+  prochaine session. Relisez-la au début, mettez-la à jour à la fin (écriture libre ici).
+- Les brouillons personnels vont dans `00-Boite-de-reception/`, les projets personnels dans
+  `40-Projets/`. Ce qui intéresse toute l'entreprise est proposé pour le dépôt `entreprise`.

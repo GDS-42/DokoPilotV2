@@ -16,6 +16,9 @@ dokopilot_defaults:
     currency: EUR
     fiscal_year_start: "01-01"
   server:
+    # true: the server is the machine that runs the CLI and Ansible (connection local, no
+    # SSH to itself); only Debian 13 amd64 is accepted (tasks/local-server.yml).
+    local: false
     address: ""
     ssh_port: 22
     hostname: ""
@@ -38,12 +41,22 @@ dokopilot_defaults:
   dokos:
     site_name: ""
     admin_email: ""
+  # Each person: id, email, first_name, last_name, role (dirigeant | membre, exactly one
+  # dirigeant), assistant (default true), assistant_email (default assistant.<id>@<domain of
+  # email>). tasks/main.yml completes the entries and derives dp.users.entrepreneur,
+  # dp.users.assistants and dp.users.dirigeant, which the roles of version 0.1 read.
   users:
-    entrepreneur:
-      email: ""
-      first_name: ""
-      last_name: ""
-    assistants: []
+    people: []
+  context:
+    enabled: true
+    direction: true             # direction repository (the dirigeant and their assistant)
+    import_path: ""             # folder of the workstation imported into the inbox
+  models:
+    provider: ""                # opencode provider id (anthropic, mistral, ollama...)
+    bureau: ""                  # "<provider>/<model>", or empty: chosen in the harness
+    atelier: ""                 # "<provider>/<model>", or empty
+    small: ""                   # "<provider>/<model>"; set to bureau when empty and bureau is set
+    claude_code_auth: subscription  # subscription | api_key
   dokos_ai:
     mcp_allow_writes: true
     providers: []
@@ -93,6 +106,50 @@ dokopilot_required_secrets:
   - dokos_admin_password
   - entrepreneur_password
   - restic_password
+
+# Identifiers of people (accounts and perso-<id> repositories) and e-mail addresses.
+# Forgejo account names: no dash at either end, never two in a row.
+dokopilot_person_id_regex: '^(?=.{2,31}$)[a-z][a-z0-9]*(-[a-z0-9]+)*$'
+# Person ids that would collide with an account or a route of Forgejo: its administration
+# account, the assistants' prefix (assistant-<id>) and the reserved user names of Forgejo
+# (models/user/user.go, reservedUsernames). The forgejo role refuses them again before any
+# change, from the list of the running version.
+dokopilot_reserved_person_ids:
+  - actor
+  - admin
+  - api
+  - assets
+  - attachments
+  - avatar
+  - avatars
+  - captcha
+  - commits
+  - debug
+  - dokopilot-admin
+  - error
+  - explore
+  - forgejo-actions
+  - ghost
+  - gitea-actions
+  - issues
+  - login
+  - metrics
+  - milestones
+  - new
+  - notifications
+  - org
+  - pulls
+  - raw
+  - repo
+  - repo-avatars
+  - search
+  - user
+  - v2
+dokopilot_email_regex: '^[^@\s]+@[^@\s]+$'
+
+# Model settings: an opencode provider id, and models written "<provider>/<model>".
+dokopilot_model_provider_regex: '^[a-z0-9][a-z0-9._-]*$'
+dokopilot_model_regex: '^[a-z0-9][a-z0-9._-]*/[^\s/]\S*$'
 
 # Accepted SSH public key formats (the example placeholder of client.example.yml does not match).
 dokopilot_ssh_key_regex: >-

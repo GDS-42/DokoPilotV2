@@ -1,0 +1,49 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Demo profile only (dp.demo.load_test_data): replaces entreprise/entreprise.md. Everything is
+    fictitious and matches demo/data/atelier-demo.yml and docs/donnees-de-test.md. -#}
+---
+type: fiche
+statut: actif
+sensibilite: interne
+fonction: direction
+projet: ""
+verifie: {{ context_date }}
+fraicheur: annuelle
+sources:
+  - "Données de démonstration DokoPilot (docs/donnees-de-test.md)"
+---
+# {{ context_company }}
+
+> **Entreprise fictive de démonstration.** Tout est inventé : raison sociale, adresse, SIREN,
+> numéro de TVA, clients et fournisseurs. Les données de gestion sont dans Dokos.
+
+## Identité
+
+| Élément | Valeur |
+| --- | --- |
+| Raison sociale | {{ context_company }} |
+| Abréviation dans Dokos | {{ dp.client.company_abbr }} |
+| SIREN, TVA | 000000018 (fictif), FR66000000018 |
+| Société dans Dokos | [{{ context_company }}]({{ context_dokos_link }}/app/company/{{ context_company | urlencode }}) |
+| Adresse du siège | 12 rue des Copeaux, 39000 Lons-le-Saunier |
+| Pays, devise | {{ dp.client.country }}, {{ dp.client.currency }} ; exercice civil |
+| Activité | menuiserie-ébénisterie : meubles sur mesure en chêne (tables, chaises, bibliothèques), étude, pose et livraison |
+| Banque | compte courant « Banque Démo », relié au compte 5121 (fiche dans Dokos) |
+
+## Personnes
+
+| Personne | Rôle | Compte (Forgejo) | Assistant | Fonctions |
+| --- | --- | --- | --- | --- |
+{% for p in context_people %}
+| {{ (p.first_name ~ ' ' ~ p.last_name) | trim }} | {{ 'Dirigeant' if p.role == 'dirigeant' else 'Membre' }} | `{{ p.id }}` | {{ ('`' ~ forgejo_assistant_prefix ~ p.id ~ '`') if p.assistant | default(false) else 'aucun' }} | {{ 'direction, commercial, achats, comptabilité et finance' if p.role == 'dirigeant' else 'production' }} |
+{% endfor %}
+
+## Ce que l'entreprise fait
+
+L'atelier fabrique dans le Jura des meubles en chêne massif, en petite série ou sur mesure, pour
+des professionnels (restaurants, hôtels, agences d'architecture intérieure, cabinets, une
+mairie) et quelques particuliers. Il achète son bois, ses panneaux, sa quincaillerie et ses
+finitions à six fournisseurs réguliers ([fonction Achats](50-Fonctions/achats/README.md)) et
+facture à 30 jours ([délais de paiement](20-Notes-permanentes/factures-clients-a-30-jours.md)).
+
+Pour s'y retrouver : [la carte « Du devis au paiement »](30-Cartes/carte-du-devis-au-paiement.md).

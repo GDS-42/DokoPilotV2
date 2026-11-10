@@ -27,7 +27,11 @@ client:
 
 # Serveur cible (VPS au nom de l'entrepreneur, ou VM locale)
 server:
-  address: 192.168.122.10       # adresse SSH utilisée par Ansible
+  # true : « tout sur cette machine ». Le serveur est la machine où tournent bin/dokopilot
+  # et Ansible (Debian 13 amd64 seulement) : connexion locale, sans SSH vers elle-même, et
+  # sudo avec le mot de passe du compte qui lance les commandes (option -K).
+  local: false
+  address: 192.168.122.10       # adresse SSH utilisée par Ansible (inutile si local: true)
   ssh_port: 22
   hostname: dokopilot-demo      # nom d'hôte donné à la machine
   bootstrap_user: debian        # compte initial fourni par l'hébergeur (premier passage seulement)
@@ -64,17 +68,43 @@ dokos:
   # Les versions exactes (image, applications) sont figées dans
   # ansible/roles/dokos/defaults/main.yml ; ne les changez ici qu'en connaissance de cause.
 
-# Personnes et assistants
+# Personnes de l'entreprise : exactement un dirigeant, les autres sont des membres.
+# Chaque personne a un compte dans Forgejo (dépôts de contexte) et son dépôt perso-<id> ;
+# le dirigeant a aussi son compte dans Dokos et le dépôt direction.
+# Avec assistant: true, la personne reçoit un « assistant » (dans Dokos et dans Forgejo),
+# l'identité que son agent utilise : il lit et prépare des brouillons, il ne valide,
+# n'annule ni ne supprime jamais rien, et ne pousse jamais dans Forgejo.
 users:
-  entrepreneur:
-    email: dirigeant@demo.local
-    first_name: Camille
-    last_name: Martin
-  # Chaque personne qui utilise un agent reçoit un utilisateur « assistant » dans Dokos :
-  # il peut lire et préparer des brouillons, jamais valider, annuler ni supprimer.
-  assistants:
-    - for: dirigeant@demo.local
-      email: assistant.dirigeant@demo.local
+  people:
+    - id: camille               # identifiant unique : une minuscule, puis minuscules, chiffres ou tirets (2 à 31 caractères)
+      email: camille.martin@atelier-demo.test
+      first_name: Camille
+      last_name: Martin
+      role: dirigeant           # dirigeant | membre
+      assistant: true           # défaut : true
+      assistant_email: ""       # vide = assistant.<id>@<domaine de email>, ici assistant.camille@atelier-demo.test
+    # Exemple de membre :
+    # - id: lucas
+    #   email: lucas.bernard@atelier-demo.test
+    #   first_name: Lucas
+    #   last_name: Bernard
+    #   role: membre
+
+# Contexte préinstallé : dépôts Git dans Forgejo, sur le serveur, joignables par le réseau privé
+context:
+  enabled: true
+  direction: true               # crée le dépôt direction (le dirigeant et son assistant seulement)
+  import_path: ""               # dossier du poste à importer dans la boîte de réception (ex. un coffre Obsidian)
+
+# Modèles d'IA utilisés par le harnais. La clé du fournisseur ne va JAMAIS ici ni dans les
+# secrets du client : elle reste sur le poste de chaque personne.
+models:
+  provider: ""                  # fournisseur opencode : anthropic, openai, openrouter, vercel, mistral, scaleway, ollama…
+  bureau: ""                    # "<fournisseur>/<modèle>" : données de l'entreprise, choisi pour la confidentialité
+  atelier: ""                   # "<fournisseur>/<modèle>" : travail technique, choisi pour la performance
+  small: ""                     # "<fournisseur>/<modèle>" : titres et résumés ; vide = le modèle bureau
+  claude_code_auth: subscription  # subscription (abonnement Claude, /login) | api_key (seulement avec Claude Code)
+  # Vide = la personne choisit dans le harnais.
 
 # Dokos AI (serveur MCP intégré à Dokos)
 dokos_ai:
@@ -116,7 +146,7 @@ harness:
     enabled: false
     caldav_url: ""
     username: ""
-    email: ""                   # par défaut, l'adresse de l'entrepreneur
+    email: ""                   # par défaut, l'adresse du dirigeant
     calendars: []               # agendas autorisés ; vide = tous
 
 # Données de test (profil demo uniquement)

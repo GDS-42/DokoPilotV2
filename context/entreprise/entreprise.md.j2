@@ -1,0 +1,46 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+---
+type: fiche
+statut: actif
+sensibilite: interne
+fonction: direction
+projet: ""
+verifie: {{ context_date }}
+fraicheur: annuelle
+sources:
+  - "Configuration de l'installation DokoPilot ({{ context_date }})"
+---
+# {{ context_company }}
+
+Fiche d'identité de l'entreprise : ce qui ne change presque jamais. Les données de gestion
+(adresses des clients, coordonnées bancaires, chiffres) sont dans Dokos ; les autres
+renseignements sont à compléter par l'entreprise.
+
+## Identité
+
+| Élément | Valeur |
+| --- | --- |
+| Raison sociale | {{ context_company }} |
+| Abréviation dans Dokos | {{ dp.client.company_abbr }} |
+| SIREN | {{ dp.client.siren if dp.client.siren | default('') | length > 0 else 'à compléter' }} |
+| Société dans Dokos | [{{ context_company }}]({{ context_dokos_link }}/app/company/{{ context_company | urlencode }}) |
+| Pays, devise | {{ dp.client.country }}, {{ dp.client.currency }} |
+| Début de l'exercice | {{ dp.client.fiscal_year_start }} (jour-mois) |
+| Activité | à compléter |
+| Adresse du siège | à compléter (elle est aussi dans la fiche Société de Dokos) |
+
+## Personnes
+
+| Personne | Rôle | Compte (Forgejo) | Assistant | Fonctions |
+| --- | --- | --- | --- | --- |
+{% for p in context_people %}
+| {{ (p.first_name ~ ' ' ~ p.last_name) | trim }} | {{ 'Dirigeant' if p.role == 'dirigeant' else 'Membre' }} | `{{ p.id }}` | {{ ('`' ~ forgejo_assistant_prefix ~ p.id ~ '`') if p.assistant | default(false) else 'aucun' }} | à compléter |
+{% endfor %}
+
+Les fonctions de chaque personne se renseignent ici et dans la fiche de la fonction
+([`50-Fonctions/`](50-Fonctions/README.md)).
+
+## Ce que l'entreprise fait
+
+À compléter : métier, clients types, produits et services principaux, saisonnalité, ce qui
+distingue l'entreprise. Rédigez-le avec la direction ; l'agent ne l'invente pas.

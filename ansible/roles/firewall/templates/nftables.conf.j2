@@ -53,6 +53,10 @@ table inet {{ firewall_table }} {
         # Tailscale: through the tunnel, only Dokos (tailscale serve) and SSH. Direct WireGuard
         # connections need no inbound rule: Tailscale opens them from the outbound side.
         iifname "{{ firewall_tailscale_interface }}" tcp dport { {{ 443 if dp.network.tailscale.https | default(true) else 80 }}, {{ dp.server.ssh_port }} } accept
+{%   if dp.context.enabled | default(false) | bool %}
+        # Forgejo, the context repositories (second tailscale serve)
+        iifname "{{ firewall_tailscale_interface }}" tcp dport {{ firewall_forgejo_tailscale_port }} accept
+{%   endif %}
 {% endif %}
 {% if dp.network.mode == 'lan' %}
 
@@ -62,6 +66,16 @@ table inet {{ firewall_table }} {
 {%   endif %}
 {%   if lan_v6 %}
         tcp dport {{ firewall_lan_http_port }} ip6 saddr @lan_allowed_v6 accept
+{%   endif %}
+{%   if dp.context.enabled | default(false) | bool %}
+
+        # Forgejo, the context repositories (Caddy), from the same private ranges
+{%     if lan_v4 %}
+        tcp dport {{ firewall_forgejo_lan_port }} ip saddr @lan_allowed_v4 accept
+{%     endif %}
+{%     if lan_v6 %}
+        tcp dport {{ firewall_forgejo_lan_port }} ip6 saddr @lan_allowed_v6 accept
+{%     endif %}
 {%   endif %}
 {% endif %}
     }

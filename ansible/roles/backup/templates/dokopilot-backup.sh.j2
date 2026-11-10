@@ -3,8 +3,9 @@
 # Managed by DokoPilot (Ansible): local changes are overwritten.
 #
 # Sauvegarde de Dokos : `bench backup --with-files` dans le conteneur backend, puis
-# envoi chiffré par restic de ces fichiers et de la configuration de la pile (sans son
-# .env), rétention, puis vérification rapide du dépôt. Lancée chaque jour par
+# (contexte activé) une copie cohérente des données de Forgejo, service arrêté quelques
+# secondes, puis envoi chiffré par restic de ces fichiers et de la configuration des
+# piles (sans leur .env), rétention, puis vérification rapide du dépôt. Lancée chaque jour par
 # {{ backup_unit_name }}.timer, ou à la demande : bin/dokopilot backup <client>.
 #   dokopilot-backup [--pre-restore]
 # --pre-restore : sauvegarde de l'état actuel juste avant une restauration, étiquetée
@@ -19,6 +20,9 @@ env_file={{ backup_env_file | quote }}
 keep_daily={{ dp.backup.keep.daily | int }}
 keep_weekly={{ dp.backup.keep.weekly | int }}
 keep_monthly={{ dp.backup.keep.monthly | int }}
+# Forgejo (context repositories); empty when the context is disabled.
+forgejo_dir={{ (dokopilot_forgejo_dir if dp.context.enabled | default(false) | bool else '') | quote }}
+forgejo_backup_dir={{ dokopilot_forgejo_backup_dir | quote }}
 {% raw %}
 
 tag=dokopilot
@@ -57,10 +61,39 @@ if (( ${#databases[@]} != 1 )); then
   exit 1
 fi
 
+paths=("$work" "$stack_dir")
+excludes=(--exclude "$stack_dir/.env")
+forgejo_work=""
+if [[ -n "$forgejo_dir" ]]; then
+  if [[ -f "$forgejo_dir/compose.yaml" ]]; then
+    fcompose() {
+      docker compose --project-directory "$forgejo_dir" -f "$forgejo_dir/compose.yaml" "$@"
+    }
+    forgejo_work="$forgejo_backup_dir/current"
+    rm -rf "$forgejo_work"
+    install -d -m 0700 "$forgejo_work"
+    echo "Copie des données de Forgejo (contexte), service arrêté quelques secondes…"
+    # SQLite and the Git repositories are copied with Forgejo stopped: the copy is consistent.
+    trap 'fcompose start forgejo >/dev/null 2>&1 || true' EXIT
+    fcompose stop forgejo
+    copied=0
+    fcompose run --rm --no-deps -T --entrypoint tar forgejo -C /var/lib/gitea -cf - . \
+      > "$forgejo_work/forgejo-data.tar" || copied=$?
+    fcompose start forgejo
+    trap - EXIT
+    if (( copied != 0 )); then
+      echo "La copie des données de Forgejo a échoué (code $copied)." >&2
+      exit 1
+    fi
+    paths+=("$forgejo_work" "$forgejo_dir")
+    excludes+=(--exclude "$forgejo_dir/.env")
+  else
+    echo "Forgejo n'est pas encore installé ($forgejo_dir) : le contexte n'est pas sauvegardé." >&2
+  fi
+fi
+
 echo "Envoi vers le dépôt restic…"
-restic backup --quiet --tag "$tag" --tag "site:$site" \
-  --exclude "$stack_dir/.env" \
-  "$work" "$stack_dir"
+restic backup --quiet --tag "$tag" --tag "site:$site" "${excludes[@]}" "${paths[@]}"
 
 if [[ "$tag" == dokopilot ]]; then
   echo "Rétention : $keep_daily jours, $keep_weekly semaines, $keep_monthly mois…"
@@ -74,6 +107,9 @@ echo "Vérification du dépôt…"
 restic check --quiet
 
 rm -rf "$work"
+if [[ -n "$forgejo_work" ]]; then
+  rm -rf "$forgejo_work"
+fi
 restic snapshots --tag "$tag" --latest 1 --compact
 echo "Sauvegarde terminée."
 {% endraw %}

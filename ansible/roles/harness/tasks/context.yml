@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The person's clones of the context repositories (docs/plan-v0.2.md C-4), over HTTP(S) from
+# Forgejo: <client>/entreprise is the workspace itself, <client>/direction goes into direction/
+# (dirigeant only, when context.direction), <client>/perso-<id> into perso/. Each clone is
+# configured with the person's identity and git's `store` helper on the private credentials
+# file; it is updated with a fast-forward only, and only when clean (files/workspace_git.py).
+
+- name: Describe the clones of this person
+  vars:
+    _base: "{{ _harness_forgejo_url ~ dp.client.id ~ '/' }}"
+  ansible.builtin.set_fact:
+    _harness_repos: >-
+      {{ [{'label': 'entreprise', 'path': harness_dest, 'url': _base ~ 'entreprise.git', 'exclude': harness_git_exclude}]
+         + ([{'label': 'direction', 'path': harness_dest ~ '/direction', 'url': _base ~ 'direction.git'}]
+            if _harness_dirigeant | bool and dp.context.direction | bool else [])
+         + [{'label': 'perso', 'path': harness_dest ~ '/perso', 'url': _base ~ 'perso-' ~ _harness_person.id ~ '.git'}] }}
+
+- name: Clone or update the context repositories (fast-forward only, never a push)
+  vars:
+    _payload:
+      action: clones
+      credential_file: "{{ harness_git_credentials_file }}"
+      identity:
+        name: "{{ (_harness_person.first_name ~ ' ' ~ _harness_person.last_name | default('')) | trim }}"
+        email: "{{ _harness_person.email }}"
+      repos: "{{ _harness_repos }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ role_path }}/files/workspace_git.py"
+    stdin: "{{ _payload | to_json }}"
+  register: _harness_clones_run
+  changed_when: (_harness_clones_run.stdout | from_json).changed | bool
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Keep the result of the clones
+  ansible.builtin.set_fact:
+    _harness_clones: "{{ _harness_clones_run.stdout | from_json }}"
+  when: not ansible_check_mode
+
+- name: Stop on a problem with the clones
+  ansible.builtin.fail:
+    msg: "{{ _harness_clones.msg }}"
+  when:
+    - not ansible_check_mode
+    - _harness_clones.failed | bool
+
+- name: Refuse an entreprise repository that is still empty
+  ansible.builtin.fail:
+    msg: >-
+      Le dépôt {{ dp.client.id }}/entreprise est encore vide sur Forgejo : le contexte n'a pas été
+      déposé. Lancez « bin/dokopilot install {{ dp.client.id }} » (rôle context), puis relancez
+      « bin/dokopilot harness {{ dp.client.id }} ».
+  when:
+    - not ansible_check_mode
+    - (_harness_clones.repos | selectattr('label', 'eq', 'entreprise') | first).state == 'empty'
+
+- name: Look for the instructions of the agents in the clone
+  ansible.builtin.stat:
+    path: "{{ harness_dest }}/AGENTS.md"
+  register: _harness_agents_md
+  when: not ansible_check_mode
+
+- name: Refuse a workspace without AGENTS.md
+  ansible.builtin.fail:
+    msg: >-
+      {{ harness_dest }}/AGENTS.md est introuvable : les consignes des agents viennent du dépôt
+      {{ dp.client.id }}/entreprise, qui n'en a pas. Déposez le contexte (« bin/dokopilot install
+      {{ dp.client.id }} », dépôt vide seulement) ou ajoutez AGENTS.md au dépôt, envoyez-le, puis
+      relancez « bin/dokopilot harness {{ dp.client.id }} ».
+  when:
+    - not ansible_check_mode
+    - not _harness_agents_md.stat.exists

@@ -9,6 +9,5 @@ maintenance:
     - name: integrateur
       ssh_public_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICdlz24XChizBwhFPp6gSD44SkpfKjNkaDkSJAQyvIlB test@example"]
 users:
-  entrepreneur: { email: dirigeant@example.test, first_name: Alex, last_name: Test }
-  assistants:
-    - { for: dirigeant@example.test, email: assistant@example.test }
+  people:
+    - { id: alex, email: dirigeant@example.test, first_name: Alex, last_name: Test, role: dirigeant, assistant_email: assistant@example.test }

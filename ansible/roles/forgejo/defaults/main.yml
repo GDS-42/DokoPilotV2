@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Forgejo on the company server: the Git server of the context repositories (C-2,
+# docs/decisions.md D-18 to D-22). Separate Compose project, SQLite, data volume, published
+# on 127.0.0.1 only; the proxy role publishes it (Caddy :3000 in lan mode, tailscale serve
+# :8443 in tailscale mode). Reads `dp` and `secrets` only.
+
+# --- Paths and names shared with the proxy, firewall, backup and context roles
+# (the same defaults are repeated in each role; override them together).
+dokopilot_forgejo_dir: /opt/dokopilot/forgejo
+dokopilot_forgejo_compose_project: dokopilot-forgejo
+dokopilot_etc_dir: /etc/dokopilot
+# The container publishes on 127.0.0.1 only, on this port.
+dokopilot_forgejo_http_port: 3001
+# Public ports: Caddy in lan mode, tailscale serve in tailscale mode.
+dokopilot_forgejo_lan_port: 3000
+dokopilot_forgejo_tailscale_port: 8443
+
+# Credentials of each account, root 0600, directory 0700: <dir>/<person id>.json =
+# {"user", "password", "token"}, read by the workstation harness (bin/dokopilot harness);
+# <dir>/assistant-<id>.json = {"user", "password"} (an assistant holds no token, D-32).
+forgejo_credentials_dir: "{{ dokopilot_etc_dir }}/forgejo"
+
+# --- Image: Forgejo 17.0.1 (2026-10-26, latest stable release on 2026-11-06), rootless
+# variant (runs as uid 1000), GPL-3.0-or-later (README of the tag, image label
+# org.opencontainers.image.licenses). Digest of the multi-architecture index, read with
+# `docker buildx imagetools inspect codeberg.org/forgejo/forgejo:17.0.1-rootless`.
+forgejo_image: codeberg.org/forgejo/forgejo:17.0.1-rootless@sha256:5ef02fbcf22beef56b8c844952ffad58cfe177b6f98e46e6abb5df90b88dc8d3
+
+# --- Accounts (C-2)
+forgejo_admin_user: dokopilot-admin
+# No mail is ever sent (mailer disabled): addresses under .internal (reserved for private use).
+forgejo_admin_email: "dokopilot-admin@{{ dp.client.id }}.dokopilot.internal"
+# Prefix of the assistant accounts: assistant-<person id>.
+forgejo_assistant_prefix: assistant-
+# Display name of an assistant account, also the author of its commits (AGENTS.md, rule 8).
+forgejo_assistant_full_name: "Assistant de {first_name}"
+# Persons get a random initial password (written in their credential file). Forgejo refuses
+# Git over HTTPS and the API, even with a token, while « must change password » is set
+# (verified on 17.0.1: « remote: Update your password »): the workstation could not clone
+# before the person logs in once. The person changes it in the Forgejo settings.
+forgejo_people_must_change_password: false
+forgejo_password_length: 24
+# Assistants are restricted accounts: they only see the repositories given to them.
+forgejo_assistants_restricted: true
+
+# Token of each person: Git over HTTPS (clone, pull, push) only, limited to the repositories
+# of the person (repository-specific access token). Replaced when that set changes. The
+# assistants hold none (nothing uses one: the workstation uses the person's token); a token
+# of this name on an assistant account, left by an earlier version, is deleted (D-32).
+forgejo_token_name: dokopilot
+forgejo_token_scopes:
+  - write:repository
+
+# --- Organisation, teams and repositories (C-2)
+forgejo_team_members: membres
+forgejo_team_direction: direction
+# Repository units the teams can write to (code, issues, pull requests, wiki).
+forgejo_team_units:
+  - repo.code
+  - repo.issues
+  - repo.pulls
+  - repo.wiki
+# Default branch of the context repositories. It is protected (files/forgejo_provision.py,
+# PROTECTION, D-32): nobody can force-push or delete it; whoever can write pushes normally.
+forgejo_default_branch: main
+forgejo_repo_descriptions:
+  entreprise: Contexte commun de l'entreprise (toutes les personnes et leurs assistants)
+  direction: Contexte de la direction (dirigeant et son assistant), confidentiel
+  perso: Contexte personnel de {name} et de son assistant
+
+# --- Container
+forgejo_wait_timeout: 300
+# Python of the server that runs files/forgejo_provision.py (standard library only).
+forgejo_python: /usr/bin/python3

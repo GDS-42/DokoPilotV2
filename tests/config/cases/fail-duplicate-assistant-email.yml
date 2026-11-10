@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Two people cannot share an assistant address.
+# expect: doit être unique et différente de celle de toute personne
+users:
+  people:
+    - { id: alex, email: dirigeant@example.test, first_name: Alex, role: dirigeant, assistant_email: assistant@example.test }
+    - { id: lucas, email: lucas@example.test, first_name: Lucas, role: membre, assistant_email: assistant@example.test }

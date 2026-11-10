@@ -1,0 +1,73 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Demo profile only: replaces entreprise/50-Fonctions/achats/README.md with a filled sheet. -#}
+{%- macro supplier(name) -%}
+[{{ name }}]({{ context_dokos_link }}/app/supplier/{{ name | urlencode }})
+{%- endmacro -%}
+---
+type: fonction
+statut: actif
+sensibilite: interne
+fonction: achats
+projet: ""
+verifie: {{ context_date }}
+fraicheur: annuelle
+sources:
+  - "Données de démonstration DokoPilot (docs/donnees-de-test.md)"
+---
+# Fonction : Achats
+
+## Mission
+
+Acheter le bois, les panneaux, la quincaillerie et les finitions au bon prix et à temps pour
+les commandes des clients, puis vérifier que ce qui est reçu et facturé correspond à ce qui a
+été commandé.
+
+## Qui s'en occupe
+
+| Personne | Rôle dans la fonction |
+| --- | --- |
+| {{ (context_dirigeant.first_name ~ ' ' ~ context_dirigeant.last_name) | trim }} | choisit les fournisseurs, passe les commandes, valide les factures d'achat dans Dokos |
+| Assistant de {{ context_dirigeant.first_name }} | rapproche les factures reçues des commandes et des réceptions, prépare les brouillons |
+
+## Fournisseurs réguliers
+
+| Fournisseur | Ce qu'il fournit | Où |
+| --- | --- | --- |
+| {{ supplier('Scierie Démo du Jura') }} | bois massif (planches de chêne) | Champagnole |
+| {{ supplier('Panneaux Démo Bois') }} | panneaux (contreplaqué bouleau) | Lyon |
+| {{ supplier('Quincaillerie Démo Pro') }} | charnières, vis | Lons-le-Saunier |
+| {{ supplier('Peintures et Vernis Démo') }} | vernis, colle | Chalon-sur-Saône |
+| {{ supplier('Transports Démo Express') }} | transport du bois | Lons-le-Saunier |
+| {{ supplier('Maintenance Machines Démo') }} | entretien des machines | Pontarlier |
+
+Leurs coordonnées, SIREN et IBAN sont dans Dokos ; un changement d'IBAN annoncé par courriel est
+toujours vérifié par téléphone auprès d'un contact connu avant toute modification.
+
+## Routines
+
+| Quand | Quoi | Où (Dokos, procédure) |
+| --- | --- | --- |
+| à chaque livraison | saisir la réception (quantités réellement reçues) | `Purchase Receipt` |
+| chaque semaine | traiter les factures électroniques reçues | `Supplier Invoice`, procédure `dokopilot-factures-fournisseurs` |
+| chaque mois | relancer les commandes non reçues | `Purchase Order` non reçues |
+
+## Comment on traite une facture reçue
+
+1. eTransactions crée la facture fournisseur à partir de la facture électronique reçue.
+2. L'agent retrouve la commande citée et la réception, compare prix et quantités
+   ([la règle](../../20-Notes-permanentes/controler-les-factures-fournisseurs.md)).
+3. Facture conforme : il prépare la facture d'achat en brouillon, rattachée à la commande et à
+   la réception. Écart : il le signale et propose un message au fournisseur.
+4. {{ context_dirigeant.first_name }} vérifie le brouillon et le valide dans Dokos.
+
+## Points ouverts dans la démonstration
+
+- Panneaux Démo Bois (facture PDB-11872) : écart de prix de 52,50 € HT à signaler.
+- Quincaillerie Démo Pro (facture QDP-F-30512) : vis facturées mais pas encore reçues.
+- Transports Démo Express et Maintenance Machines Démo : deux prestations sans commande, à
+  imputer sur un compte de charge.
+- Peintures et Vernis Démo : commande de vernis et de colle pas encore livrée.
+
+## Projets et décisions
+
+- Carte : [Du devis au paiement](../../30-Cartes/carte-du-devis-au-paiement.md)

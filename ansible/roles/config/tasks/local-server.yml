@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A local server (server.local: true, "everything on this machine") must be Debian 13 amd64.
+# tasks/main.yml includes this file by itself when the play has gathered facts (system.yml,
+# bootstrap.yml...). A play that does not gather facts can run the check explicitly, after
+# the config role; it does nothing unless dp.server.local is true:
+#   - ansible.builtin.include_role: {name: config, tasks_from: local-server}
+
+- name: Gather the minimal facts of the local server
+  ansible.builtin.setup:
+    gather_subset: [min]
+  when:
+    - dp.server.local
+    - ansible_facts['distribution'] is not defined
+
+- name: Check that the local server is Debian 13 amd64
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - ansible_facts['distribution'] == 'Debian'
+      - ansible_facts['distribution_major_version'] == '13'
+      - ansible_facts['architecture'] == 'x86_64'
+    fail_msg: >-
+      « Tout sur cette machine » (server.local: true) demande une Debian 13 en amd64 (x86_64),
+      la seule cible de l'image de Dokos. Cette machine indique {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }} ({{ ansible_facts['architecture'] }}) :
+      installez le serveur sur une autre machine (server.local: false) et pilotez-le d'ici en SSH.
+  when: dp.server.local

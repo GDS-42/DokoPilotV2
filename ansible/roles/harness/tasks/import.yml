@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Import of an existing folder (context.import_path, for example an Obsidian vault) into the
+# inbox of the entreprise clone, once (decision D-27): copied into
+# 00-Boite-de-reception/import-<date>/ without symbolic links, version-control folders or
+# executable bits, committed locally as the person, never pushed. The person sorts it and
+# sends it with `bin/dokopilot sync`. ~/.config/dokopilot/<client>/imports.json remembers it.
+
+- name: Import the folder into the inbox (once, committed on this computer only)
+  vars:
+    _payload:
+      action: import
+      repo: "{{ harness_dest }}"
+      source: "{{ dp.context.import_path }}"
+      inbox: "{{ harness_context_inbox }}"
+      date: "{{ harness_import_date | default(now(fmt='%Y-%m-%d'), true) }}"
+      marker: "{{ harness_import_marker_file }}"
+      skip_names: "{{ harness_import_skip_names }}"
+      protected:
+        - "{{ harness_config_root }}"
+      identity:
+        name: "{{ (_harness_person.first_name ~ ' ' ~ _harness_person.last_name | default('')) | trim }}"
+        email: "{{ _harness_person.email }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ role_path }}/files/workspace_git.py"
+    stdin: "{{ _payload | to_json }}"
+  register: _harness_import_run
+  changed_when: (_harness_import_run.stdout | from_json).changed | bool
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Stop on a problem with the import
+  ansible.builtin.fail:
+    msg: "{{ (_harness_import_run.stdout | from_json).msg }}"
+  when:
+    - not ansible_check_mode
+    - (_harness_import_run.stdout | from_json).failed | bool
+
+- name: Tell the person about the import
+  ansible.builtin.set_fact:
+    _harness_notes: "{{ _harness_notes + ['Import : ' ~ (_harness_import_run.stdout | from_json).message] }}"
+  when: not ansible_check_mode

@@ -7,6 +7,10 @@ dokopilot_stack_dir: /opt/dokopilot/stack
 dokopilot_compose_project: dokopilot
 dokopilot_etc_dir: /etc/dokopilot
 dokopilot_bench_backup_dir: /var/lib/dokopilot/bench-backups
+# Forgejo (context repositories), saved when dp.context.enabled: same defaults as the forgejo role.
+dokopilot_forgejo_dir: /opt/dokopilot/forgejo
+# Working directory of the copy of the Forgejo data volume (removed after each backup).
+dokopilot_forgejo_backup_dir: /var/lib/dokopilot/forgejo-backups
 
 # restic settings (RESTIC_REPOSITORY, RESTIC_PASSWORD, secrets.restic_env), root only.
 backup_env_file: "{{ dokopilot_etc_dir }}/restic.env"

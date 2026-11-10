@@ -9,6 +9,33 @@
   check_mode: false
   register: _maint_login
 
+# "Everything on this machine" (server.local): the account that runs the play is a maintenance
+# account and the person's own. Its password is never changed and sudo keeps asking for it
+# (bin/dokopilot -K), so it must have one: once in the maintenance group only, an account
+# without a usable password could not use sudo any more.
+- name: Note whether this play runs on the server itself, as a maintenance account
+  ansible.builtin.set_fact:
+    _maint_local_login: "{{ (dp.server.local | default(false) | bool) and _maint_login.stdout in (dp.maintenance.users | map(attribute='name') | list) }}"
+
+- name: Read the password state of the account that runs this local play
+  ansible.builtin.command:
+    argv: [passwd, --status, "{{ _maint_login.stdout }}"]
+  changed_when: false
+  check_mode: false
+  register: _maint_password_status
+  when: _maint_local_login
+
+- name: Refuse a local run with an account that has no usable password
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - (_maint_password_status.stdout.split() + ['', ''])[1] == 'P'
+    fail_msg: >-
+      Tout sur cette machine : le compte « {{ _maint_login.stdout }} » n'a pas de mot de passe
+      utilisable, or sudo le demandera après ce passage. Aucun compte n'a été modifié : définissez-en un
+      (sudo passwd {{ _maint_login.stdout }}), puis relancez avec -K.
+  when: _maint_local_login
+
 - name: Create the maintenance group
   ansible.builtin.group:
     name: "{{ maintenance_group }}"
@@ -38,10 +65,23 @@
       maintenance.users : ce passage le verrouillerait en cours de route. Relancez avec un
       compte de maintenance conservé (option --user ou variable DOKOPILOT_SSH_USER).
 
+# Before any account changes groups (the next task removes sudo, adm…), so that the account
+# running the play always keeps a sudo rule, even if the run stops in between.
+- name: Grant sudo to the maintenance group
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: "{{ maintenance_sudoers_file }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
 - name: Create or update the maintenance accounts
   vars:
     # Stable salt, so that the same password gives the same hash and the task stays idempotent.
     _maint_salt: "{{ ('dokopilot:' ~ dp.client.id ~ ':' ~ item.name) | hash('sha256') }}"
+    # On a local server, the password of the person running the play is left as it is.
+    _maint_own_password: "{{ _maint_local_login and item.name == _maint_login_user }}"
   ansible.builtin.user:
     name: "{{ item.name }}"
     comment: "{{ item.full_name | default(item.name) }}"
@@ -50,8 +90,10 @@
     groups: "{{ [maintenance_group] + maintenance_extra_groups }}"
     append: false
     expires: -1
-    password: "{{ (secrets.maintenance_sudo_password | password_hash('sha512', _maint_salt[:16])) if dp.maintenance.sudo_requires_password else omit }}"
-    password_lock: "{{ omit if dp.maintenance.sudo_requires_password else true }}"
+    password: >-
+      {{ omit if _maint_own_password or not dp.maintenance.sudo_requires_password
+         else secrets.maintenance_sudo_password | password_hash('sha512', _maint_salt[:16]) }}
+    password_lock: "{{ omit if _maint_own_password or dp.maintenance.sudo_requires_password else true }}"
   loop: "{{ dp.maintenance.users }}"
   loop_control:
     label: "{{ item.name }}"
@@ -73,25 +115,18 @@
   loop_control:
     label: "{{ item.name }}"
 
-- name: Grant sudo to the maintenance group
-  ansible.builtin.template:
-    src: sudoers.j2
-    dest: "{{ maintenance_sudoers_file }}"
-    owner: root
-    group: root
-    mode: "0440"
-    validate: /usr/sbin/visudo -cf %s
-
 # Cloud images (cloud-init) and some hosting providers grant NOPASSWD sudo to the initial
 # account. Once our rule is in place, those rules are removed so that sudo really asks for
 # the password. The account running this play keeps its rule when removing it would break
 # the rest of the run (provider account during bootstrap, or no become password given):
-# the next run, made with a maintenance account and its password, removes it.
+# the next run, made with a maintenance account and its password, removes it. On a local
+# server the password typed for -K is not visible to the play; the account was checked above
+# to have a usable password, so its rule goes too.
 - name: Remove the password-less sudo rules of the maintenance and provider accounts
   when: dp.maintenance.sudo_requires_password
   vars:
     _maint_has_become_password: "{{ (ansible_become_password | default(ansible_become_pass | default(''), true)) | string | length > 0 }}"
-    _maint_keep_login_rule: "{{ _maint_login_user not in _maint_names or not _maint_has_become_password }}"
+    _maint_keep_login_rule: "{{ _maint_login_user not in _maint_names or not (_maint_has_become_password or _maint_local_login) }}"
     _maint_nopasswd_accounts: >-
       {{ (_maint_names + [dp.server.bootstrap_user]) | unique
          | reject('equalto', 'root')
@@ -127,6 +162,7 @@
       when:
         - _maint_login_user in _maint_names
         - not _maint_has_become_password
+        - not _maint_local_login
 
 - name: Retire the maintenance accounts that are no longer listed
   when: _maint_retired | length > 0

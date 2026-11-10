@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A company without a dirigeant is refused.
+# expect: dirigeants déclarés : aucun
+users:
+  people:
+    - { id: alex, email: dirigeant@example.test, first_name: Alex, role: membre }

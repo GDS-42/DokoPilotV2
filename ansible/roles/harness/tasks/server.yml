@@ -1,41 +1,78 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Runs on the server (play 1 of harness.yml): reads the token of the entrepreneur's assistant
-# user and, in tailscale mode, the MagicDNS name. Nothing is changed on the server.
-# Contract with the Dokos provisioning: /etc/dokopilot/assistants/<assistant email>.json,
-# root 0600, {"user": "...", "api_key": "...", "api_secret": "..."}.
+# Runs on the server (play 1 of harness.yml), for one person (tasks/person.yml). Reads with
+# sudo, nothing is changed on the server:
+#   - the Dokos credentials of the person's assistant, for the dirigeant only (decision D-29):
+#     /etc/dokopilot/assistants/<assistant email>.json = {"user", "api_key", "api_secret"};
+#   - the person's Forgejo credentials (forgejo role):
+#     /etc/dokopilot/forgejo/<id>.json = {"user", "password", "token"};
+#   - the address of Forgejo (forgejo role, tasks/url.yml) and, in tailscale mode, the
+#     MagicDNS name of the server (address of Dokos).
+# What does not exist for this person is skipped; play 2 explains it in French.
 
-- name: Find the assistant user of the entrepreneur
-  ansible.builtin.set_fact:
-    _harness_assistant_email: >-
-      {{ dp.users.assistants | selectattr('for', 'equalto', dp.users.entrepreneur.email)
-         | map(attribute='email') | first | default('') }}
+- name: Find the person of this workstation
+  ansible.builtin.include_tasks: person.yml
 
-- name: Check that the entrepreneur has an assistant user
-  ansible.builtin.assert:
-    quiet: true
-    that:
-      - _harness_assistant_email | length > 0
-    fail_msg: >-
-      Aucun utilisateur assistant n'est déclaré pour {{ dp.users.entrepreneur.email }} :
-      ajoutez-le dans users.assistants (client.yml), lancez « bin/dokopilot install
-      {{ dp.client.id }} », puis relancez « bin/dokopilot harness {{ dp.client.id }} ».
+- name: Look for the Dokos credentials of the dirigeant's assistant
+  ansible.builtin.stat:
+    path: "{{ harness_server_credentials_dir }}/{{ _harness_person.assistant_email }}.json"
+  become: "{{ harness_server_become | bool }}"
+  register: _harness_dokos_file_stat
+  when:
+    - _harness_dokos_user | bool
+    - harness_assistant_credentials is not defined
 
-- name: Read the credentials of the assistant user on the server
+- name: Read the Dokos credentials of the dirigeant's assistant
   ansible.builtin.slurp:
-    src: "{{ harness_server_credentials_dir }}/{{ _harness_assistant_email }}.json"
-  become: true
-  register: _harness_credentials_file
+    src: "{{ harness_server_credentials_dir }}/{{ _harness_person.assistant_email }}.json"
+  become: "{{ harness_server_become | bool }}"
+  register: _harness_dokos_file
   no_log: true
+  when:
+    - _harness_dokos_user | bool
+    - harness_assistant_credentials is not defined
+    - _harness_dokos_file_stat.stat.exists
 
-- name: Keep the credentials in memory for the workstation play
+- name: Keep the Dokos credentials in memory for the workstation play
   ansible.builtin.set_fact:
-    _harness_server_credentials: "{{ _harness_credentials_file.content | b64decode | from_json }}"
+    _harness_server_credentials: "{{ _harness_dokos_file.content | b64decode | from_json }}"
   no_log: true
+  when: _harness_dokos_file.content is defined
+
+- name: Look for the Forgejo credentials of the person
+  ansible.builtin.stat:
+    path: "{{ harness_server_forgejo_credentials_dir }}/{{ _harness_person.id }}.json"
+  become: "{{ harness_server_become | bool }}"
+  register: _harness_forgejo_file_stat
+  when: harness_forgejo_credentials is not defined
+
+- name: Read the Forgejo credentials of the person
+  ansible.builtin.slurp:
+    src: "{{ harness_server_forgejo_credentials_dir }}/{{ _harness_person.id }}.json"
+  become: "{{ harness_server_become | bool }}"
+  register: _harness_forgejo_file
+  no_log: true
+  when:
+    - harness_forgejo_credentials is not defined
+    - _harness_forgejo_file_stat.stat.exists
+
+- name: Keep the Forgejo credentials in memory for the workstation play
+  ansible.builtin.set_fact:
+    _harness_server_forgejo: "{{ _harness_forgejo_file.content | b64decode | from_json }}"
+  no_log: true
+  when: _harness_forgejo_file.content is defined
+
+- name: Work out the address of Forgejo (same computation as the forgejo role)
+  ansible.builtin.include_role:
+    name: forgejo
+    tasks_from: url
+    apply:
+      become: "{{ harness_server_become | bool }}"
+  when: dokopilot_forgejo_url is not defined
 
 - name: Read the MagicDNS name of the server
   ansible.builtin.command:
     cmd: tailscale status --json
-  become: true
+  become: "{{ harness_server_become | bool }}"
   register: _harness_tailscale_status
   changed_when: false
   check_mode: false

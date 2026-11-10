@@ -1,56 +1,115 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Runs on the entrepreneur's computer (play 2 of harness.yml): stores the credentials in
-# ~/.config/dokopilot/<client> (0700), then renders the workspace for the enabled harnesses.
+# Runs on the person's computer (play 2 of harness.yml): stores the credentials in
+# ~/.config/dokopilot/<client> (0700), clones or updates the context repositories (the
+# workspace is the clone of <client>/entreprise), renders the harness files into it (all
+# ignored by Git), then imports context.import_path into the inbox once.
 
 - name: Check the workstation settings
+  vars:
+    _provider: >-
+      {{ dp.models.provider or ([dp.models.bureau, dp.models.atelier, dp.models.small] | select | first | default('')).split('/') | first }}
   ansible.builtin.assert:
     quiet: true
     that:
       - harness_home is match('^/')
       - harness_dest is match('^/')
       - not (harness_dest ~ '/').startswith(harness_config_root ~ '/')
+      - dp.context.enabled | bool
       - dp.harness.enabled | length > 0
       - dp.harness.default in dp.harness.enabled
       - (dp.harness.opencode_version | default(harness_opencode_version) | int) in [1, 2]
       - not dp.harness.mail.enabled or (dp.harness.mail.imap_host | length > 0 and dp.harness.mail.username | length > 0)
       - not dp.harness.calendar.enabled or (dp.harness.calendar.caldav_url is match('^https://') and dp.harness.calendar.username | length > 0)
+      - "'claude-code' not in dp.harness.enabled or dp.models.claude_code_auth != 'api_key' or _provider in ['', 'anthropic']"
     fail_msg: >-
-      Réglages du poste invalides : harness.enabled doit contenir harness.default
-      ({{ dp.harness.default }}), le dossier de travail doit être un chemin absolu hors de
-      ~/.config/dokopilot, harness.opencode_version vaut 1 ou 2, la messagerie demande
-      harness.mail.imap_host et harness.mail.username, l'agenda une adresse
-      harness.calendar.caldav_url en https:// et harness.calendar.username.
+      Réglages du poste invalides : le harnais travaille dans le dépôt de contexte (context.enabled
+      doit valoir true), harness.enabled doit contenir harness.default ({{ dp.harness.default }}),
+      le dossier de travail doit être un chemin absolu hors de ~/.config/dokopilot,
+      harness.opencode_version vaut 1 ou 2, la messagerie demande harness.mail.imap_host et
+      harness.mail.username, l'agenda une adresse harness.calendar.caldav_url en https:// et
+      harness.calendar.username ; avec Claude Code et models.claude_code_auth: api_key, la clé de
+      ~/.config/dokopilot/{{ dp.client.id }}/model-api-key est une clé Anthropic (models.provider:
+      anthropic ou vide).
 
-- name: Choose the credentials of the assistant user
+- name: Find the person of this workstation
+  ansible.builtin.include_tasks: person.yml
+
+- name: Start the list of notes for the person
+  ansible.builtin.set_fact:
+    _harness_notes: []
+    _harness_server_host: "{{ groups['dokopilot'][0] }}"
+
+- name: Choose the credentials read on the server (or injected)
   ansible.builtin.set_fact:
     _harness_credentials: >-
-      {{ harness_assistant_credentials if harness_assistant_credentials is defined
-         else hostvars[groups['dokopilot'][0]]['_harness_server_credentials'] }}
+      {{ (harness_assistant_credentials if harness_assistant_credentials is defined
+          else hostvars[_harness_server_host]['_harness_server_credentials'] | default({})) if _harness_dokos_user | bool else {} }}
+    _harness_forgejo: >-
+      {{ harness_forgejo_credentials if harness_forgejo_credentials is defined
+         else hostvars[_harness_server_host]['_harness_server_forgejo'] | default({}) }}
   no_log: true
 
-- name: Check the credentials of the assistant user
+- name: Check the credentials without showing them
+  ansible.builtin.set_fact:
+    _harness_dokos_ok: >-
+      {{ _harness_credentials is mapping
+         and _harness_credentials.api_key | default('') is match('^[A-Za-z0-9]{8,}$')
+         and _harness_credentials.api_secret | default('') is match('^[A-Za-z0-9]{8,}$') }}
+    _harness_forgejo_ok: >-
+      {{ _harness_forgejo is mapping
+         and _harness_forgejo.user | default('') == _harness_person.id
+         and _harness_forgejo.token | default('') is match('^[A-Za-z0-9]{8,}$')
+         and _harness_forgejo.password | default('') | length > 0 }}
+  no_log: true
+
+- name: Refuse missing or incomplete Forgejo credentials
   ansible.builtin.assert:
     quiet: true
     that:
-      - _harness_credentials is mapping
-      - _harness_credentials.api_key | default('') is match('^[A-Za-z0-9]{8,}$')
-      - _harness_credentials.api_secret | default('') is match('^[A-Za-z0-9]{8,}$')
+      - _harness_forgejo_ok | bool
     fail_msg: >-
-      Le fichier d'identifiants de l'assistant lu sur le serveur est incomplet : relancez
-      « bin/dokopilot install {{ dp.client.id }} », qui le crée.
-  no_log: true
+      Identifiants Forgejo de {{ _harness_person.first_name }} ({{ _harness_person.id }}) introuvables ou
+      incomplets sur le serveur ({{ harness_server_forgejo_credentials_dir }}/{{ _harness_person.id }}.json) :
+      lancez « bin/dokopilot install {{ dp.client.id }} », qui crée le compte et ses identifiants, puis
+      relancez « bin/dokopilot harness {{ dp.client.id }} --person {{ _harness_person.id }} ».
+
+- name: Explain why Dokos is not configured for this person
+  vars:
+    _no_user: >-
+      {{ 'Dokos : en version 0.2, seul l’assistant du dirigeant a un utilisateur dans Dokos (décision D-29) ; '
+         ~ 'l’agent de ' ~ _harness_person.first_name ~ ' travaille sans le serveur MCP dokos.' }}
+    _missing: >-
+      {{ 'Dokos : identifiants de l’assistant ' ~ _harness_person.assistant_email ~ ' introuvables ou incomplets '
+         ~ 'sur le serveur (' ~ harness_server_credentials_dir ~ ') ; le harnais est configuré sans Dokos. Lancez '
+         ~ '« bin/dokopilot install ' ~ dp.client.id ~ ' », puis relancez « bin/dokopilot harness ' ~ dp.client.id ~ ' ».' }}
+  ansible.builtin.set_fact:
+    _harness_dokos_user: false
+    _harness_notes: "{{ _harness_notes + [_no_user if not _harness_dokos_user | bool else _missing] }}"
+  when: not (_harness_dokos_user | bool and _harness_dokos_ok | bool)
+
+- name: Keep mail and calendar for the dirigeant (their settings describe the dirigeant's accounts)
+  vars:
+    _note: >-
+      {{ 'Messagerie et agenda : les réglages harness.mail et harness.calendar décrivent les comptes du '
+         ~ 'dirigeant ; ils ne sont pas configurés sur le poste d’un membre en version 0.2.' }}
+  ansible.builtin.set_fact:
+    _harness_mail: "{{ dp.harness.mail.enabled | bool and _harness_dirigeant | bool }}"
+    _harness_calendar: "{{ dp.harness.calendar.enabled | bool and _harness_dirigeant | bool }}"
+    _harness_notes: >-
+      {{ _harness_notes + ([_note] if not _harness_dirigeant | bool
+                           and (dp.harness.mail.enabled | bool or dp.harness.calendar.enabled | bool) else []) }}
 
 - name: Work out the address of Dokos on the local network
   ansible.builtin.set_fact:
-    _harness_dokos_host: "{{ dp.server.address }}"
-    _harness_dokos_url: "http://{{ dp.server.address }}"
+    _harness_dokos_host: "{{ 'localhost' if dp.server.local | bool else dp.server.address }}"
+    _harness_dokos_url: "http://{{ 'localhost' if dp.server.local | bool else dp.server.address }}"
   when: dp.network.mode == 'lan'
 
 - name: Work out the address of Dokos on the Tailscale network
   vars:
     _dns_name: >-
       {{ (harness_tailscale_dns_name if harness_tailscale_dns_name is defined
-          else hostvars[groups['dokopilot'][0]]['_harness_server_dns_name'] | default(''))
+          else hostvars[_harness_server_host]['_harness_server_dns_name'] | default(''))
          | trim | regex_replace('\.$', '') }}
   ansible.builtin.set_fact:
     _harness_dokos_host: "{{ _dns_name }}"
@@ -63,9 +122,26 @@
     that:
       - _harness_dokos_host is match('^[A-Za-z0-9.:-]+$')
     fail_msg: >-
-      Adresse de Dokos introuvable : en mode lan, renseignez server.address ; en mode
-      tailscale, vérifiez que le serveur est connecté (tailscale status) et que MagicDNS
-      est activé dans la console Tailscale.
+      Adresse de Dokos introuvable : en mode lan, renseignez server.address (ou server.local:
+      true) ; en mode tailscale, vérifiez que le serveur est connecté (tailscale status) et que
+      MagicDNS est activé dans la console Tailscale.
+  when: _harness_dokos_user | bool
+
+- name: Choose the address of Forgejo (forgejo role, read on the server, or injected)
+  ansible.builtin.set_fact:
+    _harness_forgejo_url: >-
+      {{ (dokopilot_forgejo_url if dokopilot_forgejo_url is defined
+          else hostvars[_harness_server_host]['dokopilot_forgejo_url'] | default('')) | regex_replace('/+$', '') ~ '/' }}
+
+- name: Check the address of Forgejo
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _harness_forgejo_url is match('^https?://[A-Za-z0-9.:\[\]-]+/$')
+    fail_msg: >-
+      Adresse de Forgejo introuvable ({{ _harness_forgejo_url }}) : en mode lan, renseignez
+      server.address (ou server.local: true) ; en mode tailscale, vérifiez que le serveur est
+      connecté (tailscale status) et que MagicDNS est activé dans la console Tailscale.
 
 - name: Create the private DokoPilot folders on this computer
   ansible.builtin.file:
@@ -78,20 +154,52 @@
     - "{{ harness_taint_dir }}"
     - "{{ harness_staging_dir }}"
 
-- name: Store the Dokos token of the assistant user on this computer
+- name: Store the Dokos token of the assistant on this computer
   ansible.builtin.copy:
     content: "{{ _harness_credentials.api_key }}:{{ _harness_credentials.api_secret }}"
     dest: "{{ harness_token_file }}"
     mode: "0600"
   no_log: true
+  when: _harness_dokos_user | bool
+
+- name: Remove a Dokos token this person is not entitled to
+  ansible.builtin.file:
+    path: "{{ harness_token_file }}"
+    state: absent
+  when: not _harness_dokos_user | bool
+
+# git-credentials: one line in the format git's `store` helper writes back after each use
+# (credential-store.c: user, password and host percent-encoded, so host:port is host%3aport),
+# so that the next run finds the same content.
+- name: Store the Git token and the initial Forgejo password of the person on this computer
+  vars:
+    _credential_line: >-
+      {{ _harness_forgejo_url | urlsplit('scheme') }}://{{ _harness_forgejo.user | urlencode }}:{{
+         _harness_forgejo.token | urlencode }}@{{ _harness_forgejo_url | urlsplit('netloc') | replace(':', '%3a') }}
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ item.dest }}"
+    mode: "0600"
+  no_log: true
+  loop:
+    - dest: "{{ harness_git_credentials_file }}"
+      content: "{{ _credential_line }}\n"
+    - dest: "{{ harness_forgejo_password_file }}"
+      content: "{{ _harness_forgejo.password }}"
+
+- name: Prepare the key of the model provider
+  ansible.builtin.include_tasks: models.yml
 
 - name: Set up the mail connector
   ansible.builtin.include_tasks: mail.yml
-  when: dp.harness.mail.enabled | bool
+  when: _harness_mail | bool
 
 - name: Set up the calendar connector
   ansible.builtin.include_tasks: calendar.yml
-  when: dp.harness.calendar.enabled | bool
+  when: _harness_calendar | bool
+
+- name: Clone or update the context repositories
+  ansible.builtin.include_tasks: context.yml
 
 - name: Build the permissions, the MCP servers and the guard policies
   ansible.builtin.include_tasks: policy.yml
@@ -99,19 +207,31 @@
 - name: Render and install the workspace files
   ansible.builtin.include_tasks: workspace.yml
 
-- name: Tell the entrepreneur what to do next
+- name: Import the existing folder into the inbox
+  ansible.builtin.include_tasks: import.yml
+  when: dp.context.import_path | length > 0
+
+- name: Tell the person what to do next
   vars:
     _harness_commands:
       opencode: "opencode (Tab pour passer du Bureau à l'Atelier)"
       claude-code: "claude (Bureau) ou claude --agent atelier (Atelier)"
   ansible.builtin.debug:
-    msg:
-      - "Poste configuré pour {{ dp.client.company_name }} : dossier de travail {{ harness_dest }}."
-      - "Harnais par défaut : {{ dp.harness.default }} ; harnais configurés : {{ dp.harness.enabled | join(', ') }}."
-      - "Pour commencer : ouvrez un terminal dans {{ harness_dest }} et lancez {{ _harness_commands[dp.harness.default] }}."
-      - "Dokos : {{ _harness_dokos_url }} — l'agent agit sous l'identité de l'assistant, qui prépare des brouillons sans jamais valider."
-      - "Jeton et mots de passe : {{ harness_config_dir }} (privé, jamais dans le dossier de travail)."
-      - >-
-        {{ 'Fichiers modifiés sur ce poste, remplacés et conservés en .bak : ' ~ (_harness_backups | join(', '))
-           if _harness_backups | length > 0 else 'Aucun fichier modifié sur ce poste n’a été remplacé.' }}
-      - "Garde-fous et risques résiduels : docs/poste-entrepreneur.md."
+    msg: >-
+      {{ [
+           'Poste configuré pour ' ~ _harness_person.first_name ~ ' (' ~ _harness_person.id ~ '), ' ~ dp.client.company_name
+             ~ ' : dossier de travail ' ~ harness_dest ~ ' (copie du dépôt entreprise'
+             ~ (', avec direction/' if _harness_repos | selectattr('label', 'eq', 'direction') | list | length > 0 else '')
+             ~ ' et perso/).',
+           'Harnais par défaut : ' ~ dp.harness.default ~ ' ; harnais configurés : ' ~ dp.harness.enabled | join(', ') ~ '.',
+           'Pour commencer : ouvrez un terminal dans ' ~ harness_dest ~ ' et lancez ' ~ _harness_commands[dp.harness.default] ~ '.',
+           ('Dokos : ' ~ _harness_dokos_url ~ ' — l’agent agit sous l’identité de l’assistant, qui prépare des brouillons sans jamais valider.')
+             if _harness_dokos_user | bool else 'Dokos : non configuré pour cette personne.',
+           'Contexte : ' ~ _harness_forgejo_url ~ dp.client.id ~ '/ ; l’agent commite au nom de « ' ~ _harness_assistant_identity.name
+             ~ ' » et ne pousse jamais : envoyez les changements avec « ' ~ (playbook_dir | dirname | dirname) ~ '/bin/dokopilot sync ' ~ dp.client.id
+             ~ (' --person ' ~ _harness_person.id if not _harness_dirigeant | bool else '') ~ ' ».',
+           'Jetons, mots de passe et clé du modèle : ' ~ harness_config_dir ~ ' (privé, jamais dans le dossier de travail).',
+           ('Fichiers modifiés sur ce poste, remplacés et conservés en .bak : ' ~ (_harness_backups | join(', ')))
+             if _harness_backups | length > 0 else 'Aucun fichier modifié sur ce poste n’a été remplacé.',
+           'Garde-fous et risques résiduels : docs/poste-entrepreneur.md.'
+         ] + _harness_clones.repos | default([]) | map(attribute='message') | list + _harness_notes }}

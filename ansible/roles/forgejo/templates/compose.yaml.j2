@@ -1,0 +1,89 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later #}
+# Managed by DokoPilot (Ansible): local changes are overwritten.
+# Forgejo, the Git server of the context repositories: rootless image pinned by digest,
+# SQLite in the data volume, published on 127.0.0.1 only (Caddy or tailscale serve on the
+# host publish it). Settings come from the FORGEJO__<section>__<KEY> variables below, which
+# the image writes into app.ini (in the volume) at every start.
+name: {{ dokopilot_forgejo_compose_project }}
+
+services:
+  forgejo:
+    image: {{ forgejo_image }}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Read only when the image creates app.ini, on the very first start; app.ini (in the
+      # volume, saved by the backups) keeps it afterwards.
+      SECRET_KEY: ${FORGEJO_SECRET_KEY:?FORGEJO_SECRET_KEY is missing from .env}
+      INSTALL_LOCK: "true"
+      FORGEJO__DEFAULT__APP_NAME: "{{ dp.client.company_name | replace('"', '') | replace('$', '$$') }} — contexte"
+      FORGEJO__server__ROOT_URL: "{{ dokopilot_forgejo_url }}"
+      FORGEJO__server__HTTP_PORT: "3000"
+      # Clones over HTTPS only (C-2): no SSH server, no SSH clone URL.
+      FORGEJO__server__DISABLE_SSH: "true"
+      FORGEJO__server__START_SSH_SERVER: "false"
+      FORGEJO__server__LFS_START_SERVER: "false"
+      # No CDN, no Gravatar, no external resource.
+      FORGEJO__server__OFFLINE_MODE: "true"
+      FORGEJO__server__LANDING_PAGE: login
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__security__MIN_PASSWORD_LENGTH: "12"
+      FORGEJO__security__DISABLE_WEBHOOKS: "true"
+      FORGEJO__security__DISABLE_QUERY_AUTH_TOKEN: "true"
+      # Accounts are created by DokoPilot only; nothing is visible without signing in.
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      FORGEJO__service__SHOW_REGISTRATION_BUTTON: "false"
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: "true"
+      FORGEJO__service__ENABLE_NOTIFY_MAIL: "false"
+      FORGEJO__service__REGISTER_EMAIL_CONFIRM: "false"
+      FORGEJO__service__ENABLE_CAPTCHA: "false"
+      FORGEJO__service__DEFAULT_KEEP_EMAIL_PRIVATE: "true"
+      FORGEJO__service__DEFAULT_ALLOW_CREATE_ORGANIZATION: "false"
+      FORGEJO__service__DEFAULT_USER_VISIBILITY: private
+      FORGEJO__service__DEFAULT_ORG_VISIBILITY: private
+      FORGEJO__admin__DISABLE_REGULAR_ORG_CREATION: "true"
+      FORGEJO__openid__ENABLE_OPENID_SIGNIN: "false"
+      FORGEJO__openid__ENABLE_OPENID_SIGNUP: "false"
+      FORGEJO__oauth2__ENABLED: "false"
+      FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION: "false"
+      # No mail at all.
+      FORGEJO__mailer__ENABLED: "false"
+      # No telemetry and no outgoing call: no update checker, no migrations, no
+      # federation, no Actions, no package registry.
+      FORGEJO__cron_0X2E_update_checker__ENABLED: "false"
+      FORGEJO__repository__DISABLE_MIGRATIONS: "true"
+      # No mirror: a repository administrator could otherwise push-mirror the context to an
+      # outside address. [mirror] ENABLED = false disables pull and push mirrors alike
+      # (custom/conf/app.example.ini and modules/setting/mirror.go of Forgejo v17.0.1; the
+      # push mirror API then answers « Mirror feature is disabled », verified on 17.0.1).
+      FORGEJO__mirror__ENABLED: "false"
+      FORGEJO__federation__ENABLED: "false"
+      FORGEJO__actions__ENABLED: "false"
+      FORGEJO__packages__ENABLED: "false"
+      FORGEJO__picture__DISABLE_GRAVATAR: "true"
+      FORGEJO__picture__ENABLE_FEDERATED_AVATAR: "false"
+      # Every repository is private; pushes never create a repository.
+      FORGEJO__repository__FORCE_PRIVATE: "true"
+      FORGEJO__repository__DEFAULT_PRIVATE: private
+      FORGEJO__repository__DEFAULT_BRANCH: {{ forgejo_default_branch }}
+      FORGEJO__repository__ENABLE_PUSH_CREATE_USER: "false"
+      FORGEJO__repository__ENABLE_PUSH_CREATE_ORG: "false"
+      FORGEJO__i18n__LANGS: fr-FR,en-US
+      FORGEJO__i18n__NAMES: Français,English
+      FORGEJO__log__LEVEL: Info
+    ports:
+      # Loopback only: the host's proxy (Caddy in lan mode, tailscale serve) publishes it.
+      - "127.0.0.1:{{ dokopilot_forgejo_http_port }}:3000"
+    volumes:
+      - data:/var/lib/gitea
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+volumes:
+  data:

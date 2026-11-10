@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# users.entrepreneur (version 0.1) is refused with the new form, built from the old values.
+# expect: users.entrepreneur et users.assistants ne sont plus acceptés
+# expect: people: - id: helene email: helene@example.test first_name: Hélène last_name: Test role: dirigeant assistant: true
+users:
+  entrepreneur: { email: helene@example.test, first_name: Hélène, last_name: Test }
+  assistants:
+    - { for: helene@example.test, email: assistant.helene@example.test }

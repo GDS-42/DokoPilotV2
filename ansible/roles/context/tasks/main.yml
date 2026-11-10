@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Renders context/ for this client (on the workstation that runs Ansible) and deposits it
+# in the empty context repositories through the Forgejo API (role forgejo, step `fill`).
+# Runs after the forgejo role, which creates the repositories. Reads `dp` and `secrets`.
+
+- name: Work out the address of Forgejo
+  ansible.builtin.include_role:
+    name: forgejo
+    tasks_from: url
+  when: dokopilot_forgejo_url is not defined
+
+- name: Compute the values used by the context templates
+  ansible.builtin.set_fact:
+    context_company: "{{ dp.client.company_name }}"
+    context_org: "{{ dp.client.id }}"
+    context_people: "{{ dp.users.people }}"
+    context_dirigeant: "{{ dp.users.dirigeant }}"
+    context_forgejo_url: "{{ dokopilot_forgejo_url }}"
+    context_dokos_link: >-
+      {{ (context_dokos_url if context_dokos_url | length > 0
+          else dokopilot_dokos_url if dokopilot_dokos_url is defined
+          else dokopilot_forgejo_url | regex_replace(':[0-9]+/?$', '') | regex_replace('/$', '')) | regex_replace('/$', '') }}
+    context_date: "{{ now(fmt='%Y-%m-%d') }}"
+    context_mail: "{{ dp.harness.mail.enabled | default(false) | bool }}"
+    context_calendar: "{{ dp.harness.calendar.enabled | default(false) | bool }}"
+    _context_files: {}
+
+# The demo folder comes first: when two folders have the same file, the first one wins.
+- name: Render the templates of the shared repositories
+  ansible.builtin.include_tasks: render.yml
+  vars:
+    context_target:
+      repo: "{{ context_repo }}"
+      sources: >-
+        {{ ([context_source_dir ~ '/demo/' ~ context_repo] if dp.demo.load_test_data | default(false) | bool else [])
+           + [context_source_dir ~ '/' ~ context_repo] }}
+      person: {}
+  loop: "{{ ['entreprise'] + (['direction'] if dp.context.direction | bool else []) }}"
+  loop_control:
+    loop_var: context_repo
+
+- name: Render the templates of the personal repository of each person
+  ansible.builtin.include_tasks: render.yml
+  vars:
+    context_target:
+      repo: "perso-{{ context_person_item.id }}"
+      sources:
+        - "{{ context_source_dir }}/perso"
+      person: "{{ context_person_item }}"
+  loop: "{{ dp.users.people }}"
+  loop_control:
+    loop_var: context_person_item
+    label: "{{ context_person_item.id }}"
+
+- name: Deposit the context in the repositories that are still empty
+  ansible.builtin.include_role:
+    name: forgejo
+    tasks_from: step
+  vars:
+    forgejo_step: fill
+    forgejo_step_payload:
+      org: "{{ dp.client.id }}"
+      branch: "{{ context_branch }}"
+      message: "{{ context_commit_message }}"
+      author:
+        name: "{{ context_author_name }}"
+        email: "{{ context_author_email }}"
+      repos: "{{ _context_files }}"
+
+- name: Summary of the context
+  ansible.builtin.debug:
+    msg:
+      - "Contexte déposé dans : {{ forgejo_step_result.filled | default([]) | join(', ') or 'aucun dépôt (tous avaient déjà un contenu)' }}"
+      - "Laissés tels quels (déjà remplis, jamais écrasés) : {{ forgejo_step_result.skipped | default([]) | join(', ') or 'aucun' }}"
+      - "Dépôts : {{ dokopilot_forgejo_url }}{{ dp.client.id }}/"
+  when: not ansible_check_mode

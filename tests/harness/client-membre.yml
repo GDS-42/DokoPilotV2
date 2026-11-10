@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Layered on clients/demo/client.yml by run.sh, with dokopilot_person=lucas: a member (no
+# Dokos access, decision D-29; no direction repository), both harnesses, mail enabled in the
+# client file (the dirigeant's mailbox: not configured for a member), no model chosen,
+# Claude Code with an API key. The public key is a throwaway test key, not a secret.
+maintenance:
+  users:
+    - name: integrateur
+      ssh_public_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICdlz24XChizBwhFPp6gSD44SkpfKjNkaDkSJAQyvIlB test@example"]
+  sudo_requires_password: true
+
+models:
+  claude_code_auth: api_key
+
+harness:
+  default: claude-code
+  enabled: [opencode, claude-code]
+  mail:
+    enabled: true
+    imap_host: imap.example.test
+    username: camille.martin@atelier-demo.test

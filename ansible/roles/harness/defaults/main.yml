@@ -1,19 +1,31 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Agent harness on the entrepreneur's computer (opencode, Claude Code). Client settings come
-# from dp.harness; the values below are the pack's own settings and pinned versions.
+# Agent harness on the workstation of one person (opencode, Claude Code), inside the
+# company's context repository (docs/plan-v0.2.md C-4). Client settings come from dp.harness,
+# dp.models and dp.context; the values below are the pack's own settings and pinned versions.
 #
 # Injectable for tests and automation (never on the command line: use a vars file):
-#   harness_assistant_credentials  {user, api_key, api_secret}: skips the reads on the server
+#   harness_assistant_credentials  {user, api_key, api_secret}: skips the Dokos read on the server
+#   harness_forgejo_credentials    {user, password, token}: skips the Forgejo read on the server
 #   harness_tailscale_dns_name     MagicDNS name of the server (tailscale mode)
+#   dokopilot_forgejo_url          address of Forgejo, instead of the computed one
 #   harness_mail_password          mail password, instead of the interactive prompt
 #   harness_calendar_password      CalDAV password, instead of the interactive prompt
+#   harness_model_api_key          key of the model provider, instead of the interactive prompt
+#   harness_import_date            date of the import folder (AAAA-MM-JJ), instead of today
+# Tests also point the server reads at fake files: harness_server_credentials_dir,
+# harness_server_forgejo_credentials_dir and harness_server_become: false.
 
-# Where things go on the workstation. bin/dokopilot passes harness_dest (absolute) with --dest.
+# Where things go on the workstation. bin/dokopilot passes harness_dest (absolute) with --dest;
+# the workspace is the person's clone of <client>/entreprise.
 harness_home: "{{ lookup('ansible.builtin.env', 'HOME') }}"
 harness_dest: "{{ harness_home }}/DokoPilot/{{ dp.client.id }}"
 harness_config_root: "{{ harness_home }}/.config/dokopilot"
 harness_config_dir: "{{ harness_config_root }}/{{ dp.client.id }}"
 harness_token_file: "{{ harness_config_dir }}/dokos-token"
+harness_git_credentials_file: "{{ harness_config_dir }}/git-credentials"
+harness_forgejo_password_file: "{{ harness_config_dir }}/forgejo-password"
+harness_model_key_file: "{{ harness_config_dir }}/model-api-key"
+harness_import_marker_file: "{{ harness_config_dir }}/imports.json"
 harness_taint_dir: "{{ harness_config_dir }}/taint"
 harness_staging_dir: "{{ harness_config_dir }}/rendered"
 harness_mail_dir: "{{ harness_config_dir }}/mail"
@@ -24,9 +36,42 @@ harness_calendar_password_file: "{{ harness_config_dir }}/caldav-password"
 # Sources of the pack in this repository (templates, plugin, hooks, skills).
 harness_source_dir: "{{ playbook_dir | dirname | dirname }}/harness"
 
-# Server side: credentials written by the Dokos provisioning (root, 0600).
+# Server side: credentials written by the Dokos provisioning and by the forgejo role (root,
+# 0600), read with sudo. Only the dirigeant's assistant has a Dokos user (decision D-29).
+harness_server_become: true
 harness_server_credentials_dir: /etc/dokopilot/assistants
+harness_server_forgejo_credentials_dir: /etc/dokopilot/forgejo
 harness_dokos_mcp_path: /api/method/dokos_ai.mcp.endpoint
+
+# Forgejo: dokopilot_forgejo_url comes from the forgejo role (tasks/url.yml, run on the
+# server by play 1); the clone URLs are <dokopilot_forgejo_url><client id>/<repository>.git,
+# branch main, over HTTP(S) only.
+# Author of the agent's commits (forgejo_assistant_full_name of the forgejo role).
+harness_assistant_name: "Assistant de {first_name}"
+# The person's clones: entreprise is the workspace itself, direction (dirigeant only, when
+# context.direction) and perso-<id> are cloned into direction/ and perso/.
+harness_context_inbox: 00-Boite-de-reception
+# Lines kept in .git/info/exclude of the entreprise clone, whatever its .gitignore says: the
+# harness files and the two nested clones never enter the shared repository.
+harness_git_exclude:
+  - /direction/
+  - /perso/
+  - /opencode.json
+  - /opencode.json.*.bak
+  - /.mcp.json
+  - /.mcp.json.*.bak
+  - /.opencode/
+  - /.claude/
+  - /.agents/skills/dokopilot-*/
+# Import of an existing folder (context.import_path) into the inbox: never copied.
+# The instruction and settings files of agents are skipped too: an imported CLAUDE.md or
+# .claude/ would be loaded by Claude Code while the agent sorts the inbox (decision D-27).
+harness_import_skip_names: [.git, .hg, .svn, .obsidian, .trash, .Trash, .DS_Store, Thumbs.db, desktop.ini,
+                            AGENTS.md, CLAUDE.md, CLAUDE.local.md, .claude, .agents, .opencode, opencode.json, .mcp.json]
+
+# Model providers that need no key (local servers); any other provider reads its key from
+# harness_model_key_file through opencode's {file:...} substitution.
+harness_model_keyless_providers: [ollama, lmstudio]
 
 # opencode major version: 2 (native V2 configuration and guard) or 1 (V1 shapes, static
 # rules, guard that blocks instead of asking). A client can set harness.opencode_version.
@@ -35,7 +80,13 @@ harness_opencode_version: 2
 # Claude Code: the hooks need `onFailure` (v2.1.295 or later) to fail closed.
 harness_claude_code_min_version: "2.1.295"
 # true: Claude Code refuses to start when the Bash sandbox cannot run (bubblewrap missing).
-harness_claude_sandbox_required: false
+# Always on when the server is this machine (server.local): the agent then runs under the
+# maintenance account of the server.
+harness_claude_sandbox_required: "{{ dp.server.local | default(false) | bool }}"
+
+# The DokoPilot copy of this computer: its roles run with sudo at the next install, and its
+# folder holds the client settings. The agents never write it (rules below).
+harness_dokopilot_repo: "{{ playbook_dir | dirname | dirname }}"
 
 # Pinned MCP servers that run on the workstation (stdio).
 harness_mail_mcp_command: uvx
@@ -115,32 +166,68 @@ harness_oc_base_rules:
   - { action: subagent, resource: "*", effect: deny }
   - { action: execute, resource: "*", effect: deny }
 
+# opencode rules of the context (docs/plan-v0.2.md C-4), after the base rules: the agent
+# writes freely in the inbox and in perso/, asks everywhere else (base rule `* * ask`), and
+# always asks in direction/ (the dirigeant's confidential clone).
+harness_oc_context_rules:
+  - { action: edit, resource: "00-Boite-de-reception/*", effect: allow }
+  - { action: edit, resource: "perso/*", effect: allow }
+  - { action: edit, resource: "direction/*", effect: ask }
+
 # opencode rules repeated at the end of every rule list, so that no later allow can reopen
-# them: credentials, the guard's own files, and the CLIs that print a resolved configuration.
+# them: credentials, the guard's own files, Git configuration and publication, and the CLIs
+# that print a resolved configuration. Shell patterns recognise the usual forms only: see
+# docs/poste-entrepreneur.md, residual risks.
 harness_oc_protect_rules:
   - { action: read, resource: "~/.config/dokopilot/*", effect: deny }
   - { action: edit, resource: "~/.config/dokopilot/*", effect: deny }
   - { action: external_directory, resource: "~/.config/dokopilot/*", effect: deny }
   - { action: read, resource: "~/.ssh/*", effect: deny }
+  - { action: edit, resource: "~/.ssh/*", effect: deny }
+  - { action: edit, resource: "{{ harness_dokopilot_repo }}/*", effect: deny }
   - { action: read, resource: "~/.local/share/opencode/*", effect: deny }
   - { action: shell, resource: "*.config/dokopilot*", effect: deny }
   - { action: shell, resource: "*dokos-token*", effect: deny }
   - { action: shell, resource: "*mail-password*", effect: deny }
   - { action: shell, resource: "*caldav-password*", effect: deny }
+  - { action: shell, resource: "*git-credentials*", effect: deny }
+  - { action: shell, resource: "*forgejo-password*", effect: deny }
+  - { action: shell, resource: "*model-api-key*", effect: deny }
+  - { action: shell, resource: "*age-identity*", effect: deny }
+  - { action: shell, resource: "*.ssh/*", effect: deny }
+  - { action: shell, resource: "*{{ harness_dokopilot_repo }}*", effect: deny }
+  - { action: shell, resource: "sudo *", effect: deny }
+  - { action: shell, resource: "*sudo *", effect: deny }
+  - { action: shell, resource: "su", effect: deny }
+  - { action: shell, resource: "su *", effect: deny }
+  - { action: shell, resource: "*pkexec*", effect: deny }
+  - { action: shell, resource: "doas *", effect: deny }
+  - { action: shell, resource: "*git push*", effect: deny }
+  - { action: shell, resource: "*git -C * push*", effect: deny }
+  - { action: shell, resource: "*git -c * push*", effect: deny }
+  - { action: shell, resource: "*git*credential*", effect: deny }
+  - { action: shell, resource: "*git config*", effect: deny }
+  - { action: shell, resource: "*git -C * config *", effect: deny }
+  - { action: shell, resource: "*git remote*", effect: deny }
+  - { action: shell, resource: "*git -C * remote *", effect: deny }
   - { action: shell, resource: "opencode *", effect: deny }
   - { action: shell, resource: "claude *", effect: deny }
+  - { action: edit, resource: ".git/*", effect: deny }
+  - { action: edit, resource: "*/.git/*", effect: deny }
   - { action: edit, resource: "opencode.json", effect: deny }
   - { action: edit, resource: ".opencode/*", effect: deny }
-  - { action: edit, resource: ".agents/*", effect: deny }
+  - { action: edit, resource: ".agents/skills/dokopilot-*", effect: deny }
   - { action: edit, resource: ".claude/*", effect: deny }
   - { action: edit, resource: ".mcp.json", effect: deny }
   - { action: edit, resource: "CLAUDE.md", effect: deny }
+  - { action: edit, resource: "*/CLAUDE.md", effect: deny }
   - { action: edit, resource: "AGENTS.md", effect: ask }
+  - { action: edit, resource: "*/AGENTS.md", effect: ask }
 
-# Atelier (technical work): shell and edits in the workspace, no mail and no calendar.
+# Atelier (technical work): shell in the workspace without asking, no mail and no calendar.
+# File edits follow the context rules (free in the inbox and perso/, asked elsewhere).
 harness_oc_atelier_rules:
   - { action: shell, resource: "*", effect: allow }
-  - { action: edit, resource: "*", effect: allow }
   - { action: "mail_*", resource: "*", effect: deny }
   - { action: "calendar_*", resource: "*", effect: deny }
 
@@ -174,46 +261,102 @@ harness_claude_safe_tools:
   - SubagentHandback
 # Tools that the Bureau context always submits to the entrepreneur (Claude Code).
 harness_claude_bureau_confirm_tools: [Bash, PowerShell, Monitor, Edit, Write, NotebookEdit, MultiEdit]
-# Claude Code deny rules added to the MCP denials: credentials, the guard's own files, and
-# the CLIs that could print a resolved configuration. The Bash sandbox enforces the same
-# paths at the operating-system level (sandbox.filesystem in .claude/settings.json).
+# Claude Code file rules of the context (C-4), project-relative ("/" is the workspace). Ask
+# rules win over allow rules, and edits without a rule are asked (defaultMode: default).
+harness_claude_context_allow:
+  - Edit(/00-Boite-de-reception/**)
+  - Edit(/perso/**)
+harness_claude_context_ask:
+  - Edit(/direction/**)
+  - Edit(/AGENTS.md)
+  - Edit(/**/AGENTS.md)
+# Claude Code deny rules added to the MCP denials: credentials, the guard's own files, Git
+# configuration and publication, and the CLIs that could print a resolved configuration. The
+# Bash sandbox enforces the same paths at the operating-system level (sandbox.filesystem).
 harness_claude_protect_rules:
   - Read(~/.config/dokopilot/**)
   - Edit(~/.config/dokopilot/**)
   - Read(~/.ssh/**)
+  - Edit(~/.ssh/**)
+  - "Edit(/{{ harness_dokopilot_repo }}/**)"
   - Read(~/.local/share/opencode/**)
   - Bash(*.config/dokopilot*)
   - Bash(*dokos-token*)
   - Bash(*mail-password*)
   - Bash(*caldav-password*)
+  - Bash(*git-credentials*)
+  - Bash(*forgejo-password*)
+  - Bash(*model-api-key*)
+  - Bash(*age-identity*)
+  - Bash(*.ssh/*)
+  - "Bash(*{{ harness_dokopilot_repo }}*)"
+  - Bash(sudo *)
+  - Bash(su)
+  - Bash(su *)
+  - Bash(pkexec *)
+  - Bash(doas *)
+  - Bash(git push*)
+  - Bash(git -C * push*)
+  - Bash(git -c * push*)
+  - Bash(*git*credential*)
+  - Bash(git config*)
+  - Bash(git -C * config *)
+  - Bash(git remote*)
+  - Bash(git -C * remote *)
   - Bash(opencode *)
   - Bash(claude *)
+  - Edit(/.git/**)
+  - Edit(/**/.git/**)
   - Edit(/.claude/**)
   - Edit(/.mcp.json)
   - Edit(/.opencode/**)
   - Edit(/opencode.json)
-  - Edit(/.agents/**)
+  - Edit(/.agents/skills/dokopilot-*/**)
   - Edit(/CLAUDE.md)
+  - Edit(/**/CLAUDE.md)
+# Paths the Bash sandbox of Claude Code cannot write, relative to the workspace (the private
+# folder ~/.config/dokopilot is added, and also denied for reading).
+harness_claude_sandbox_deny_write:
+  - "{{ harness_dokopilot_repo }}"
+  - ~/.ssh
+  - ./.opencode
+  - ./opencode.json
+  - ./.mcp.json
+  - ./.claude
+  - ./AGENTS.md
+  - ./CLAUDE.md
+  - ./.git/config
+  - ./.git/hooks
+  - ./perso/AGENTS.md
+  - ./perso/CLAUDE.md
+  - ./perso/.git/config
+  - ./perso/.git/hooks
+  - ./direction/AGENTS.md
+  - ./direction/CLAUDE.md
+  - ./direction/.git/config
+  - ./direction/.git/hooks
 
-# French business skills (harness/skills/<name>/SKILL.md), copied for each harness.
+# Business skills of DokoPilot (harness/skills/<name>/SKILL.md, `name` = folder), copied into
+# .agents/skills/ (opencode) and .claude/skills/ (Claude Code) of the workspace. They are
+# named dokopilot-<name> and ignored by Git; the company's own skills sit next to them in
+# .agents/skills/, versioned, and are never overwritten (decision D-26).
 harness_skills:
-  - factures-fournisseurs
-  - relances-clients
-  - rapprochement-bancaire
-  - synthese-activite
-  - tri-courriels
-  - devis
+  - dokopilot-factures-fournisseurs
+  - dokopilot-relances-clients
+  - dokopilot-rapprochement-bancaire
+  - dokopilot-synthese-activite
+  - dokopilot-tri-courriels
+  - dokopilot-devis
 
-# Files of the workspace. `data` names the fact that templates/data.json.j2 serialises;
-# `template: false` copies the file as is.
+# Files of the harness rendered into the workspace (all ignored by Git). AGENTS.md and
+# CLAUDE.md come from the entreprise repository. `data` names the fact that
+# templates/data.json.j2 serialises; `template: false` copies the file as is.
 harness_workspace_files:
-  - { src: templates/AGENTS.md.j2, dest: AGENTS.md, harness: all }
   - { src: templates/data.json.j2, dest: opencode.json, data: _harness_opencode_config, harness: opencode }
   - { src: templates/opencode/bureau.md.j2, dest: .opencode/agents/bureau.md, harness: opencode }
   - { src: templates/opencode/atelier.md.j2, dest: .opencode/agents/atelier.md, harness: opencode }
   - { src: opencode/plugins/dokopilot-guard.js, dest: .opencode/plugins/dokopilot-guard.js, harness: opencode, template: false }
   - { src: templates/data.json.j2, dest: .opencode/plugins/dokopilot-guard.policy.json, data: _harness_oc_guard_policy, harness: opencode }
-  - { src: templates/CLAUDE.md.j2, dest: CLAUDE.md, harness: claude-code }
   - { src: templates/data.json.j2, dest: .mcp.json, data: _harness_claude_mcp, harness: claude-code }
   - { src: templates/data.json.j2, dest: .claude/settings.json, data: _harness_claude_settings, harness: claude-code }
   - { src: templates/claude/bureau.md.j2, dest: .claude/agents/bureau.md, harness: claude-code }
@@ -222,3 +365,4 @@ harness_workspace_files:
   - { src: claude/hooks/mail_taint_guard.py, dest: .claude/hooks/mail_taint_guard.py, harness: claude-code, template: false, mode: "0755" }
   - { src: claude/hooks/dokos_headers.py, dest: .claude/hooks/dokos_headers.py, harness: claude-code, template: false, mode: "0755" }
   - { src: claude/hooks/caldav_launcher.py, dest: .claude/hooks/caldav_launcher.py, harness: claude-code, template: false, mode: "0755" }
+  - { src: claude/hooks/model_key_helper.py, dest: .claude/hooks/model_key_helper.py, harness: claude-code, template: false, mode: "0755" }

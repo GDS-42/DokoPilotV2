@@ -1,0 +1,139 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Forgejo for the context repositories (C-2): Compose project, pinned image, SQLite, then
+# the administrator, the organisation dp.client.id, the repositories and the protection of
+# their default branch, one account per person and per assistant, the teams, the
+# collaborators, the people's tokens and the credential files (D-30, D-32).
+# Every step is idempotent. Reads `dp` and `secrets` only.
+
+- name: Check the settings of Forgejo
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - secrets.forgejo_admin_password is string
+      - secrets.forgejo_admin_password | length >= 12
+      - secrets.forgejo_admin_password != 'generate'
+      - dp.users.people | length > 0
+      - dp.users.people | selectattr('role', 'eq', 'dirigeant') | list | length == 1
+    fail_msg: >-
+      Forgejo : secrets.forgejo_admin_password (12 caractères au moins) est obligatoire
+      quand context.enabled est vrai (bin/dokopilot secrets <client> edit), et users.people
+      doit compter exactement un dirigeant.
+  no_log: true
+
+- name: Work out the address of Forgejo
+  ansible.builtin.include_tasks: url.yml
+  when: dokopilot_forgejo_url is not defined
+
+- name: Install the Python library used by the Docker modules of Ansible
+  ansible.builtin.apt:
+    name: python3-requests
+    state: present
+    install_recommends: false
+
+- name: Create the directories of Forgejo
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ dokopilot_forgejo_dir }}", mode: "0750" }
+    - { path: "{{ dokopilot_etc_dir }}", mode: "0750" }
+    - { path: "{{ forgejo_credentials_dir }}", mode: "0700" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Read the environment file of Forgejo
+  ansible.builtin.slurp:
+    src: "{{ dokopilot_forgejo_dir }}/.env"
+  register: _forgejo_env_file
+  failed_when: false
+  no_log: true
+
+# The secret key is drawn once, on the server's first installation, then kept: Forgejo only
+# reads it when it creates app.ini, which then holds it (and is saved by the backups).
+- name: Keep the secret key of Forgejo, or draw one for the first start
+  vars:
+    _existing: >-
+      {{ (_forgejo_env_file.content | default('') | b64decode)
+         | regex_search("(?m)^FORGEJO_SECRET_KEY='([A-Za-z0-9]{32,})'$", '\1') | default([], true) | first | default('') }}
+  ansible.builtin.set_fact:
+    _forgejo_secret_key: "{{ _existing or lookup('ansible.builtin.password', '/dev/null', chars=['ascii_letters', 'digits'], length=64) }}"
+  no_log: true
+
+- name: Write the environment file of Forgejo (secret key, root only)
+  ansible.builtin.copy:
+    dest: "{{ dokopilot_forgejo_dir }}/.env"
+    content: |
+      # Managed by DokoPilot (Ansible). Secret: root only, never in Git.
+      # Read by Forgejo only when it creates app.ini (first start); app.ini keeps it.
+      FORGEJO_SECRET_KEY='{{ _forgejo_secret_key }}'
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Write the Compose project of Forgejo
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: "{{ dokopilot_forgejo_dir }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Pull the Forgejo image (pinned by digest)
+  community.docker.docker_image_pull:
+    name: "{{ forgejo_image | regex_replace(':[^/@]+@', '@') }}"
+    pull: not_present
+  register: _forgejo_pull
+  retries: 5
+  delay: 15
+  until: _forgejo_pull is succeeded
+
+- name: Start Forgejo
+  community.docker.docker_compose_v2:
+    project_src: "{{ dokopilot_forgejo_dir }}"
+    state: present
+    remove_orphans: true
+    wait: true
+    wait_timeout: "{{ forgejo_wait_timeout }}"
+
+- name: Wait until Forgejo answers on 127.0.0.1
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ dokopilot_forgejo_http_port }}/api/healthz"
+    return_content: true
+  register: _forgejo_health
+  until: _forgejo_health.status == 200 and (_forgejo_health.json.status | default('')) == 'pass'
+  retries: 30
+  delay: 4
+  changed_when: false
+
+- name: Install the provisioning script of Forgejo
+  ansible.builtin.copy:
+    src: forgejo_provision.py
+    dest: "{{ dokopilot_forgejo_dir }}/provision.py"
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Describe the accounts and repositories to provision
+  ansible.builtin.include_tasks: model.yml
+
+- name: Create the accounts, the organisation, the repositories and the rights
+  ansible.builtin.include_tasks: step.yml
+  vars:
+    forgejo_step: ensure
+    forgejo_step_payload: "{{ forgejo_model }}"
+
+- name: Summary of Forgejo
+  vars:
+    _result: "{{ forgejo_step_result }}"
+  ansible.builtin.debug:
+    msg:
+      - "Forgejo {{ _result.version | default('?') }} : {{ dokopilot_forgejo_url }} (127.0.0.1:{{ dokopilot_forgejo_http_port }} sur le serveur)"
+      - "Organisation {{ dp.client.id }} ; dépôts : {{ _result.repos | default([]) | join(', ') }}"
+      - "Comptes : {{ _result.accounts | default([]) | join(', ') }} ; identifiants dans {{ forgejo_credentials_dir }}"
+      - "Désactivés : {{ _result.disabled | default([]) | join(', ') or 'aucun' }}"
+      - "Modifications : {{ _result.changes | default([]) | join(' ; ') or 'aucune' }}"
+  when: not ansible_check_mode
