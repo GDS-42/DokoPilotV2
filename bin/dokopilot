@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import re
 import secrets as pysecrets
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -263,6 +265,30 @@ def recipients_file(client: str) -> Path:
     return clients_dir() / client / "recipients.txt"
 
 
+# An age recipient: a native or plugin key (age1…), or an SSH public key (ed25519, RSA).
+RECIPIENT = re.compile(r"^(age1[a-z0-9]{20,}|ssh-(ed25519|rsa) [A-Za-z0-9+/=]{40,}( .*)?)$")
+
+
+def read_recipients(path: Path) -> list[str]:
+    """The recipients of a recipients file, one per line; comments and blank lines are skipped."""
+    if not path.exists():
+        return []
+    lines = (line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+    return [line for line in lines if line and not line.startswith("#")]
+
+
+def check_recipient(key: str) -> str:
+    """A recipient given on the command line, refused before it reaches recipients.txt: an
+    invalid line there would make every later encryption fail."""
+    key = key.strip()
+    if not RECIPIENT.match(key):
+        raise CliError(
+            f"« {key} » n'est pas une clé publique age (elle commence par age1 ; « age-keygen -y <fichier de clé> » "
+            "l'affiche) ni une clé publique SSH ed25519 ou RSA. Rien n'a été changé."
+        )
+    return key
+
+
 def ensure_identity() -> str:
     """Return the public key of the local age identity, creating it if needed."""
     path = identity_path()
@@ -275,14 +301,29 @@ def ensure_identity() -> str:
     return out
 
 
-def encrypt_secrets(client: str, data: dict[str, Any]) -> None:
-    recipients = recipients_file(client)
-    if not recipients.exists() or not recipients.read_text(encoding="utf-8").strip():
-        raise CliError(f"Aucun destinataire age dans {recipients}.")
+def encrypt_secrets(client: str, data: dict[str, Any], recipients: list[str] | None = None) -> None:
+    """Encrypts the secrets for `recipients` (default: those of recipients.txt). The previous
+    encrypted file is kept as secrets.yml.age.bak: clients/ is usually outside Git."""
+    if recipients is None:
+        recipients = read_recipients(recipients_file(client))
+    if not recipients:
+        raise CliError(f"Aucun destinataire age dans {recipients_file(client)}.")
     target = clients_dir() / client / "secrets.yml.age"
     payload = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
     tmp_target = target.with_suffix(".age.tmp")
-    run([tool("age"), "--encrypt", "--armor", "--recipients-file", str(recipients), "--output", str(tmp_target)], input=payload)
+    cmd = [tool("age"), "--encrypt", "--armor", "--output", str(tmp_target)]
+    for recipient in recipients:
+        cmd += ["--recipient", recipient]  # public keys: nothing secret on the command line
+    result = subprocess.run(cmd, input=payload, text=True, capture_output=True)
+    if result.returncode != 0:
+        tmp_target.unlink(missing_ok=True)
+        detail = (result.stderr.strip().splitlines() or ["erreur inconnue"])[-1]
+        raise CliError(
+            f"Le chiffrement des secrets a échoué ({detail}). Vérifiez les clés de {recipients_file(client)} ; "
+            "les secrets précédents sont inchangés."
+        )
+    if target.exists():
+        shutil.copy2(target, target.with_suffix(".age.bak"))
     tmp_target.replace(target)
 
 
@@ -293,23 +334,57 @@ def decrypt_secrets(client: str) -> dict[str, Any]:
     identity = identity_path()
     if not identity.exists():
         raise CliError(f"Clé age introuvable : {identity} (ou variable DOKOPILOT_AGE_IDENTITY).")
-    out = run([tool("age"), "--decrypt", "--identity", str(identity), str(source)], capture_output=True).stdout
-    data = yaml.safe_load(out) or {}
+    result = subprocess.run([tool("age"), "--decrypt", "--identity", str(identity), str(source)], text=True, capture_output=True)
+    if result.returncode != 0:
+        detail = (result.stderr.strip().splitlines() or ["erreur inconnue"])[-1]
+        raise CliError(
+            f"Impossible de déchiffrer {source} avec la clé {identity} ({detail}).\n"
+            "Cette clé n'est sans doute pas destinataire des secrets de ce client : une personne qui les déchiffre "
+            f"ajoute votre clé publique avec « bin/dokopilot init {client} --recipient <clé> » "
+            f"(votre clé publique : « age-keygen -y {identity} »)."
+        )
+    data = yaml.safe_load(result.stdout) or {}
     if not isinstance(data, dict) or "secrets" not in data:
         raise CliError(f"{source} ne contient pas de clé « secrets ».")
     return data
 
 
+def private_root() -> Path:
+    """Parent of the private working directories: next to the age identity, in the folder the
+    harness denies to the agents (~/.config/dokopilot), never in /tmp. On a machine that is
+    both the server and the workstation, an agent runs under the same account. The leading
+    dot keeps the name apart from the per-client folders of that directory."""
+    return identity_path().parent / ".run"
+
+
+def sweep_private_root(root: Path) -> None:
+    """Deletes what an interrupted run left behind (power cut, kill -9): directories are
+    named after the process that owns them, and are removed once that process is gone."""
+    for child in root.iterdir():
+        pid = child.name.split("-", 1)[0]
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        try:
+            os.kill(int(pid), 0)
+        except ProcessLookupError:
+            shutil.rmtree(child, ignore_errors=True)
+        except OSError:
+            pass  # the process exists (another account's): leave its directory
+
+
 @contextmanager
 def private_tempdir() -> Iterator[Path]:
-    path = Path(tempfile.mkdtemp(prefix="dokopilot-"))
-    path.chmod(0o700)
+    """A directory only this account reads, for decrypted secrets, deleted at the end of the
+    block: also on Ctrl-C, and on a closed terminal or a kill (see main)."""
+    root = private_root()
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root.chmod(0o700)
+    sweep_private_root(root)
+    path = Path(tempfile.mkdtemp(prefix=f"{os.getpid()}-", dir=root))
     try:
         yield path
     finally:
-        for child in path.iterdir():
-            child.unlink()
-        path.rmdir()
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def fill_generated(value: Any) -> Any:
@@ -382,7 +457,7 @@ def ansible_playbook(client: str, playbook: str, args: argparse.Namespace, *, bo
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             yaml.safe_dump({"secrets": data["secrets"]}, handle, allow_unicode=True)
         cmd = [tool("ansible-playbook"), "-i", str(inv), "-e", f"@{settings_file}"]
-        cmd += ["-e", f"@{secrets_file}", "-e", f"dokopilot_client_dir={clients_dir() / client}"]
+        cmd += ["-e", f"@{secrets_file}", "-e", json.dumps({"dokopilot_client_dir": str(clients_dir() / client)})]
         # Tests only: extra role variables (proxy and CA of a test sandbox, small swap), never
         # client settings. Client files cannot carry them: unknown top-level keys are refused.
         if os.environ.get("DOKOPILOT_TEST_EXTRA_VARS"):
@@ -459,22 +534,51 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"Mis à jour : {target / 'client.local.yml'}")
     recipients = recipients_file(args.client)
     public_key = ensure_identity()
-    lines = recipients.read_text(encoding="utf-8").split() if recipients.exists() else []
-    for key in [public_key, *(args.recipient or [])]:
-        if key not in lines:
-            lines.append(key)
-    recipients.write_text("\n".join(lines) + "\n", encoding="utf-8")
     secrets_file = target / "secrets.yml.age"
+    current = read_recipients(recipients)
+    requested = [check_recipient(key) for key in args.recipient or []]
+    if secrets_file.exists() and current and public_key not in current:
+        # Never add a key to an existing client on its own: someone who holds the secrets does
+        # it, knowingly, with --recipient. (This key could not decrypt them anyway.)
+        raise CliError(
+            f"La clé age de ce poste n'est pas destinataire des secrets de « {args.client} » ({recipients}).\n"
+            f"Demandez à une personne qui les déchiffre de lancer : bin/dokopilot init {args.client} --recipient {public_key}\n"
+            "Rien n'a été changé dans les destinataires ni dans les secrets."
+        )
+    wanted = list(current)
+    for key in [public_key, *requested]:
+        if key not in wanted:
+            wanted.append(key)
     if secrets_file.exists():
-        if args.recipient:
-            encrypt_secrets(args.client, decrypt_secrets(args.client))
-            print("Secrets rechiffrés pour les nouveaux destinataires.")
+        data = decrypt_secrets(args.client)
+        template = load_yaml(REPO / "config" / "secrets.example.yml").get("secrets") or {}
+        existing = data.get("secrets") if isinstance(data.get("secrets"), dict) else {}
+        added = [key for key in template if key not in existing]
+        for key in added:
+            existing[key] = fill_generated(template[key])
+        data["secrets"] = existing
+        if added or wanted != current:
+            # Encrypt first: recipients.txt changes only once the secrets are readable by all.
+            encrypt_secrets(args.client, data, wanted)
+            if added:
+                print(f"Secrets ajoutés (absents de ce client) : {', '.join(added)}.")
+            if wanted != current:
+                print("Secrets rechiffrés pour les nouveaux destinataires.")
         else:
             print(f"Secrets déjà présents : {secrets_file} (inchangés).")
     else:
         template = load_yaml(REPO / "config" / "secrets.example.yml")
-        encrypt_secrets(args.client, fill_generated(template))
+        encrypt_secrets(args.client, fill_generated(template), wanted)
         print(f"Secrets créés et chiffrés : {secrets_file}")
+    if wanted != current:
+        kept = recipients.read_text(encoding="utf-8").rstrip("\n").splitlines() if recipients.exists() else []
+        recipients.write_text("\n".join([*kept, *(key for key in wanted if key not in current)]) + "\n", encoding="utf-8")
+    print(f"Destinataires des secrets ({len(wanted)}) : " + ", ".join(f"{key[:16]}…" for key in wanted))
+    print(
+        "\nÀ conserver hors de cette machine (gestionnaire de mots de passe) : la clé age "
+        f"({identity_path()}) et une copie du dossier {target} ; le mot de passe du dépôt de sauvegarde "
+        f"s'affiche avec « bin/dokopilot secrets {args.client} show restic_password ». Sans eux, les sauvegardes sont illisibles."
+    )
     print(f"\nÉtape suivante : vérifiez la configuration avec « bin/dokopilot config {args.client} ».")
     return 0
 
@@ -486,16 +590,18 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 def cmd_playbook(playbook: str, *, bootstrap: bool = False) -> Any:
     def handler(args: argparse.Namespace) -> int:
-        extra: list[str] = []
+        # Passed as JSON: a path with a space or a typed value is one value, never parsed as
+        # several key=value pairs.
+        variables: dict[str, Any] = {}
         if getattr(args, "snapshot", None):
-            extra += ["-e", f"restore_snapshot={args.snapshot}"]
+            variables["restore_snapshot"] = args.snapshot
         if getattr(args, "dest", None):
-            extra += ["-e", f"harness_dest={Path(args.dest).expanduser().resolve()}"]
+            variables["harness_dest"] = str(Path(args.dest).expanduser().resolve())
         if getattr(args, "confirm", False):
-            extra += ["-e", "restore_confirmed=true"]
+            variables["restore_confirmed"] = True
         if hasattr(args, "person"):
-            # person_for() only returns an id that matches PERSON_ID: safe in key=value form.
-            extra += ["-e", f"dokopilot_person={person_for(client_settings(args.client), args.person)['id']}"]
+            variables["dokopilot_person"] = person_for(client_settings(args.client), args.person)["id"]
+        extra = ["-e", json.dumps(variables)] if variables else []
         return ansible_playbook(args.client, playbook, args, bootstrap=bootstrap, extra=extra)
 
     return handler
@@ -513,9 +619,19 @@ def workspace_dir(client: str, settings: dict[str, Any], dest: str | None) -> Pa
 
 
 # Every git call of `sync` runs as the harness role's helper runs them: no hook or fsmonitor
-# planted in a clone runs, and the credential helpers are reset to the private store file
-# (no keychain of the workstation receives the token, no helper written by an agent runs).
-GIT_SAFE_OPTIONS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+# planted in a clone runs, file names are quoted (no raw control character reaches the
+# terminal), and the credential helpers are reset to the private store file (no keychain of
+# the workstation receives the token, no helper written by an agent runs).
+GIT_SAFE_OPTIONS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.quotePath=true")
+# The same options, for the git commands `sync` advises the person to type.
+GIT_SAFE_COMMAND = "git " + " ".join(GIT_SAFE_OPTIONS)
+# Control characters (escape sequences that rewrite the terminal) and bidirectional overrides
+# (text shown in another order than stored): removed from every line that comes from a commit.
+UNPRINTABLE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def printable(text: str) -> str:
+    return UNPRINTABLE.sub("\N{REPLACEMENT CHARACTER}", text)
 
 
 def git(repo: Path, *args: str, env: dict[str, str], credentials: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -551,11 +667,13 @@ def credential_hosts(credentials: Path) -> set[str]:
     return hosts
 
 
-def check_clone(label: str, repo: Path, client: str, credentials: Path) -> None:
-    """Refuses a clone whose Git settings an agent could have changed: unexpected keys (a
-    program to run, another push address, a branch following another remote, a .git that
-    points elsewhere: the harness helper's audit), another credential helper, or a remote
-    that is not the Forgejo of the credential file. Nothing is sent before these checks."""
+def check_clone(label: str, repo: Path, client: str, credentials: Path, expected: str) -> None:
+    """Refuses a clone an agent could have tampered with: unexpected Git settings (a program
+    to run, another push address, a branch following another remote, a .git that points
+    elsewhere), replacement objects, a nested repository or a submodule (the harness helper's
+    audit), another credential helper, or a remote that is not the repository `expected`
+    (<organisation>/<name>) on the Forgejo of the credential file. Nothing is sent before
+    these checks."""
     module = workspace_git_module()
     advice = f"Vérifiez {repo}/.git/config, puis relancez « bin/dokopilot harness {client} » (il remet les réglages attendus)."
     try:
@@ -576,13 +694,27 @@ def check_clone(label: str, repo: Path, client: str, credentials: Path) -> None:
                 f"« {label} » ({repo}) : l'adresse du serveur ({parts.scheme}://{parts.netloc.rpartition('@')[2]}) n'est pas "
                 f"celle de Forgejo, ou porte des identifiants ; rien n'a été envoyé.\n{advice}"
             )
-    elif parts.scheme not in ("", "file") or "::" in urls[0]:
-        raise CliError(f"« {label} » ({repo}) : adresse de serveur inattendue ({urls[0]}) ; rien n'a été envoyé.\n{advice}")
+        if not parts.path.removesuffix("/").removesuffix(".git").endswith(f"/{expected}") or parts.query or parts.fragment:
+            raise CliError(
+                f"« {label} » ({repo}) : la copie ne pointe pas sur le dépôt attendu ({expected}) mais sur "
+                f"{printable(parts.path)} ; rien n'a été envoyé.\n{advice}"
+            )
+    elif os.environ.get("DOKOPILOT_TEST_LOCAL_REMOTES") == "1" and (
+        parts.scheme == "file" or (parts.scheme == "" and urls[0].startswith("/") and "::" not in urls[0])
+    ):
+        # Tests only: a bare repository of this machine stands for Forgejo.
+        print(f"Attention : dépôt local accepté pour « {label} » (DOKOPILOT_TEST_LOCAL_REMOTES).", file=sys.stderr)
+    else:
+        # SSH (also written user@host:path), git://, a local path, a remote helper: never Forgejo.
+        raise CliError(
+            f"« {label} » ({repo}) : adresse de serveur inattendue ({printable(urls[0])}) : seule l'adresse HTTP(S) de "
+            f"Forgejo est acceptée ; rien n'a été envoyé.\n{advice}"
+        )
 
 
 def git_lines(repo: Path, *args: str, env: dict[str, str]) -> list[str]:
     result = git(repo, *args, env=env)
-    return result.stdout.splitlines() if result.returncode == 0 else []
+    return [printable(line) for line in result.stdout.splitlines()] if result.returncode == 0 else []
 
 
 def git_count(repo: Path, revisions: str, env: dict[str, str]) -> int:
@@ -600,7 +732,7 @@ def rebase_in_progress(repo: Path, env: dict[str, str]) -> bool:
 
 def git_failure(result: subprocess.CompletedProcess[str]) -> str:
     output = (result.stderr or result.stdout).strip().splitlines()
-    return "\n".join(f"  {line}" for line in output[-8:])
+    return "\n".join(f"  {printable(line)}" for line in output[-8:])
 
 
 def conflict_message(label: str, repo: Path, files: list[str], client: str) -> str:
@@ -610,15 +742,19 @@ def conflict_message(label: str, repo: Path, files: list[str], client: str) -> s
         f"passages de : {listed}.\nRien de ce dépôt n'a été envoyé et la synchronisation s'arrête ici.\n"
         "Pour résoudre : ouvrez ces fichiers, gardez le bon texte entre les marques <<<<<<< et >>>>>>> "
         "(vous pouvez demander à votre assistant de vous aider), puis lancez :\n"
-        f"  git -C {repo} add -u && git -C {repo} -c core.editor=true rebase --continue\n"
+        f"  {GIT_SAFE_COMMAND} -C {shlex.quote(str(repo))} add -u && "
+        f"{GIT_SAFE_COMMAND} -C {shlex.quote(str(repo))} -c core.editor=true rebase --continue\n"
         f"et relancez « bin/dokopilot sync {client} ». Pour revenir à l'état d'avant la synchronisation : "
-        f"git -C {repo} rebase --abort"
+        f"{GIT_SAFE_COMMAND} -C {shlex.quote(str(repo))} rebase --abort"
     )
 
 
-# Files that steer the agents (rules, Claude Code settings, company skills, what Git ignores):
-# a change received from the server is shown and accepted by the person before it is taken.
-RULE_PATHS = ("AGENTS.md", "CLAUDE.md", ".agents", ".claude", ".opencode", "opencode.json", ".mcp.json", ".gitignore")
+def rule_paths() -> tuple[str, ...]:
+    """Pathspecs of the files that steer the agents (rules, harness settings, company skills,
+    what Git ignores), at any depth: one list, in the harness role's helper. A change received
+    from the server is shown and accepted by the person before it is taken; a change about to
+    be sent is pointed out."""
+    return tuple(workspace_git_module().RULE_PATHS)
 
 
 def ask_yes(question: str) -> bool:
@@ -631,11 +767,14 @@ def ask_yes(question: str) -> bool:
     return answer.strip().lower() in {"o", "oui", "y", "yes"}
 
 
-def sync_repository(label: str, repo: Path, client: str, env: dict[str, str], credentials: Path, assume_yes: bool) -> str:
+def sync_repository(label: str, repo: Path, client: str, env: dict[str, str], credentials: Path, assume_yes: bool,
+                    expected: str) -> str:
     """Fetch, rebase, show what would be sent, push, in one clone. Returns the summary line;
     raises at the first problem. Rules received from the server are always shown and asked
     (even with --yes); the commits to send are shown and asked unless --yes."""
-    check_clone(label, repo, client, credentials)
+    check_clone(label, repo, client, credentials, expected)
+    safe_git = f"{GIT_SAFE_COMMAND} -C {shlex.quote(str(repo))}"
+    paths = rule_paths()
     if rebase_in_progress(repo, env) or git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env):
         raise CliError(conflict_message(label, repo, git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env), client))
     modified = git_lines(repo, "status", "--porcelain", "--untracked-files=no", env=env)
@@ -643,7 +782,7 @@ def sync_repository(label: str, repo: Path, client: str, env: dict[str, str], cr
         files = ", ".join(line[3:] for line in modified[:10]) + (" …" if len(modified) > 10 else "")
         raise CliError(
             f"« {label} » ({repo}) : des fichiers modifiés ne sont pas encore enregistrés dans Git : {files}.\n"
-            "Enregistrez-les (git -C " + str(repo) + " commit -am \"<ce qui a changé>\") ou annulez-les, "
+            f"Enregistrez-les ({safe_git} commit -am \"<ce qui a changé>\") ou annulez-les, "
             f"puis relancez « bin/dokopilot sync {client} ». Rien de ce dépôt n'a été envoyé."
         )
     untracked = git_lines(repo, "status", "--porcelain", "--untracked-files=all", env=env)
@@ -656,19 +795,21 @@ def sync_repository(label: str, repo: Path, client: str, env: dict[str, str], cr
             f"« {label} » ({repo}) : la récupération des changements du serveur a échoué (réseau, identifiants ou "
             f"copie sans branche suivie) ; rien n'a été envoyé.\n{git_failure(fetch)}"
         )
-    rules = git_lines(repo, "diff", "--name-only", "HEAD...@{u}", "--", *RULE_PATHS, env=env)
+    rules = git_lines(repo, "diff", "--name-only", "HEAD...@{u}", "--", *paths, env=env)
     if rules:
         print(f"\n« {label} » : les règles des agents ont changé sur le serveur ({', '.join(rules[:10])}"
               f"{' …' if len(rules) > 10 else ''}) :")
-        for line in git_lines(repo, "log", "--format=  %h %an, %ad : %s", "--date=short", "HEAD..@{u}", "--", *RULE_PATHS, env=env):
+        for line in git_lines(repo, "log", "--format=  %h %an, %ad : %s", "--date=short", "HEAD..@{u}", "--", *paths, env=env):
             print(line)
-        print(f"  Détail : git -C {repo} diff HEAD...@{{u}} -- {' '.join(RULE_PATHS)}")
+        print(f"  Détail : {safe_git} diff HEAD...@{{u}} -- {' '.join(shlex.quote(name) for name in rules[:10])}")
         if not ask_yes("  Ces règles s'appliqueront à vos agents. Les accepter ?"):
             raise CliError(
                 f"« {label} » : règles refusées ; rien n'a été reçu ni envoyé pour ce dépôt, et la synchronisation "
                 "s'arrête ici. Voyez avec la personne qui les a changées, puis relancez."
             )
-    rebase = git(repo, "rebase", "--quiet", env=env)
+    # --no-rebase-merges: a merge commit is flattened even when the person's own Git settings
+    # keep them, so that every change to send appears in the list below.
+    rebase = git(repo, "rebase", "--quiet", "--no-rebase-merges", env=env)
     if rebase.returncode != 0:
         conflicts = git_lines(repo, "diff", "--name-only", "--diff-filter=U", env=env)
         if conflicts or rebase_in_progress(repo, env):
@@ -682,6 +823,16 @@ def sync_repository(label: str, repo: Path, client: str, env: dict[str, str], cr
         for line in git_lines(repo, "log", "--stat=100", "--format=%h %an, %ad : %s", "--date=short", "@{u}..HEAD", env=env):
             if line.strip():
                 print(f"  {line}")
+        # The net difference with the server is what the push really changes there, whatever
+        # the shape of the history.
+        print("  Au total, par rapport au serveur :")
+        for line in git_lines(repo, "diff", "--stat=100", "@{u}", "HEAD", env=env):
+            print(f"    {line.strip()}")
+        sent_rules = git_lines(repo, "diff", "--name-only", "@{u}", "HEAD", "--", *paths, env=env)
+        if sent_rules:
+            print(f"  ⚠ Cet envoi change les règles des agents pour tous ceux qui ont ce dépôt : {', '.join(sent_rules[:10])}"
+                  f"{' …' if len(sent_rules) > 10 else ''}. Relisez-les : {safe_git} diff @{{u}} HEAD -- "
+                  f"{' '.join(shlex.quote(name) for name in sent_rules[:10])}")
         if not assume_yes and not ask_yes(f"  Envoyer ces {to_send} enregistrement(s) de « {label} » ?"):
             parts.append(f"envoi refusé, {to_send} enregistrement(s) restent sur ce poste")
             to_send = 0
@@ -712,9 +863,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
     # No inherited GIT_* variable (a Claude Code session sets the assistant's identity), never
     # a password prompt (the token is in the credential file), and commits replayed by the
     # rebase are committed by the person who synchronises.
+    # GIT_NO_REPLACE_OBJECTS: what is shown is what is sent, even if a replacement object was
+    # planted (the audit of each clone refuses them too).
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    env.update(GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="", SSH_ASKPASS="", GIT_COMMITTER_NAME=name,
-               GIT_COMMITTER_EMAIL=str(person.get("email", "")))
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="", SSH_ASKPASS="", GIT_NO_REPLACE_OBJECTS="1",
+               GIT_COMMITTER_NAME=name, GIT_COMMITTER_EMAIL=str(person.get("email", "")))
     client_id = str((settings.get("client") or {}).get("id") or args.client)
     credentials = Path.home() / ".config" / "dokopilot" / client_id / "git-credentials"
     print(f"Synchronisation de {workspace} pour {name} ({person['id']}) :")
@@ -723,7 +876,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
         if label not in present:
             print(f"· {label} : aucune copie sur ce poste ({workspace / sub})")
             continue
-        print(sync_repository(label, workspace / sub, args.client, env, credentials, args.yes), flush=True)
+        expected = f"{client_id}/{label if label != 'perso' else 'perso-' + str(person['id'])}"
+        print(sync_repository(label, workspace / sub, args.client, env, credentials, args.yes, expected), flush=True)
     print(f"Synchronisation terminée ({len(clones)} dépôt(s)).")
     return 0
 
@@ -744,18 +898,28 @@ def cmd_secrets(args: argparse.Namespace) -> int:
     if args.action == "keys":
         print("\n".join(sorted(data["secrets"].keys())))
         return 0
-    editor = os.environ.get("EDITOR", "nano")
+    editor = shlex.split(os.environ.get("EDITOR") or ("nano" if shutil.which("nano") else "vi"))
+    if not editor or not shutil.which(editor[0]):
+        raise CliError(f"Éditeur introuvable ({os.environ.get('EDITOR') or 'nano, vi'}) : indiquez-en un avec la variable EDITOR.")
     with private_tempdir() as tmp:
         clear = tmp / "secrets.yml"
         fd = os.open(clear, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             yaml.safe_dump(data, handle, allow_unicode=True, sort_keys=False)
-        subprocess.run([editor, str(clear)], check=True)
-        edited = load_yaml(clear)
-        if "secrets" not in edited:
-            raise CliError("Le fichier modifié doit garder la clé « secrets ». Rien n'a été changé.")
+        while True:
+            subprocess.run([*editor, str(clear)], check=True)
+            try:
+                edited = load_yaml(clear)
+                if "secrets" not in edited or not isinstance(edited["secrets"], dict):
+                    raise CliError("Le fichier modifié doit garder la clé « secrets » et ses valeurs en dessous.")
+                break
+            except (yaml.YAMLError, CliError) as error:
+                detail = str(error).strip().splitlines()[0] if str(error).strip() else "fichier illisible"
+                # A typed mistake must not lose the edit: reopen the editor when a person is there.
+                if not sys.stdin.isatty() or not ask_yes(f"Le fichier n'est pas valide ({detail}). Le rouvrir pour corriger ?"):
+                    raise CliError(f"Fichier de secrets non valide ({detail}). Rien n'a été changé.") from None
         encrypt_secrets(args.client, fill_generated(edited))
-    print("Secrets rechiffrés.")
+    print("Secrets rechiffrés (version précédente : secrets.yml.age.bak).")
     return 0
 
 
@@ -848,13 +1012,24 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
+def stop_on_signal(number: int, _frame: Any) -> None:
+    """A closed terminal (SIGHUP) or a kill (SIGTERM) ends the command as Ctrl-C does: the
+    `finally` blocks run, so the directory of decrypted secrets is deleted."""
+    raise SystemExit(128 + number)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    for number in (signal.SIGHUP, signal.SIGTERM):
+        signal.signal(number, stop_on_signal)
     try:
         return int(args.func(args))
     except CliError as error:
         print(f"Erreur : {error}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print("\nInterrompu.", file=sys.stderr)
+        return 130
     except subprocess.CalledProcessError as error:
         print(f"Erreur : la commande {Path(error.cmd[0]).name} a échoué (code {error.returncode}).", file=sys.stderr)
         return error.returncode or 1
