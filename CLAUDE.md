@@ -24,18 +24,18 @@ Read [`docs/architecture.md`](docs/architecture.md) and [`docs/decisions.md`](do
 | --- | --- |
 | `install.sh` | One-command installer (`curl … \| sh`): checks the machine, installs packages, clones a tag, runs `make setup` and the assistant |
 | `installer/` | French interactive assistant (`wizard.py`, resumable, `--answers`), example answers, secret editor |
-| `bin/dokopilot` | Single CLI: `init`, `config`, `bootstrap`, `install`, `check`, `backup`, `restore`, `demo-reset`, `harness`, `sync`, `secrets`, `ssh` |
+| `bin/dokopilot` | Single CLI: `doctor`, `init`, `config`, `bootstrap`, `install`, `check`, `backup`, `restore`, `demo-reset`, `harness`, `sync`, `secrets`, `ssh` |
 | `config/` | Commented reference of the client settings and the secrets template |
 | `clients/` | One folder per client (ignored by Git except `demo`) |
 | `ansible/roles/config` | Merges defaults, profile and client settings into the fact `dp`, validates them; every role reads `dp` only |
-| `ansible/roles/*` | System (base, maintenance, ssh, firewall, tailscale, docker, proxy), Dokos (dokos, dokos_config, demo_data, backup), context (forgejo, context) and workstation (harness) roles |
+| `ansible/roles/*` | System (base, maintenance, ssh, fail2ban, firewall, tailscale, docker, proxy), Dokos (dokos, dokos_config, demo_data, backup), context (forgejo, context) and workstation (harness) roles |
 | `ansible/playbooks/` | `site.yml` (everything), `system.yml`, `dokos.yml`, `context.yml`, `bootstrap.yml`, `check.yml`, `backup.yml`, `restore.yml`, `demo-reset.yml`, `harness.yml`, `config.yml` |
 | `context/` | Templates of the context repositories (entreprise with its tree and `AGENTS.md`, direction, perso, demo content) |
 | `stack/` | Dokos image build (apps pinned) and provisioning scripts run inside the Dokos container |
 | `demo/` | Fictitious French company, test data, sample e-invoices and bank statement |
 | `harness/` | opencode and Claude Code templates, agents, guard, French skills |
 | `vm/` | Local test VM: cloud-init seed and libvirt script |
-| `tests/` | `cli/`, `config/`, `harness/` (fast checks), `installer/` (install.sh and the assistant on Debian, Ubuntu, Fedora; local mode; end to end), `context/` (real Forgejo), `system/` (roles against a Debian 13 systemd container), `stack/` (Dokos stack, provisioning, permission tests) |
+| `tests/` | `cli/`, `config/`, `harness/`, `backup/` (fast checks; `backup/` runs the backup and restore scripts against a real restic repository with a fake docker), `installer/` (install.sh and the assistant on Debian, Ubuntu, Fedora; local mode; end to end), `context/` (unit checks, and a real Forgejo), `system/` (roles against a Debian 13 systemd container), `stack/` (unit checks; Dokos stack, provisioning, permission tests) |
 | `docs/` | Architecture, decisions, installation, local VM, security, operations, demo data, entrepreneur workstation (French) |
 
 ## Commands
@@ -44,7 +44,7 @@ Read [`docs/architecture.md`](docs/architecture.md) and [`docs/decisions.md`](do
 | --- | --- |
 | `make setup` | Ansible, linters and collections in `.venv` |
 | `make lint` | yamllint, ansible-lint (production profile), shellcheck, Python syntax |
-| `make test` | Fast tests: CLI (`tests/cli`), configuration through the CLI (`tests/config`), harness rendering and guard (`tests/harness`), assistant (`tests/installer/test_*.py`) |
+| `make test` | Fast tests: CLI and `sync` (`tests/cli`), configuration through the CLI (`tests/config`), harness rendering and guard (`tests/harness`), assistant (`tests/installer/test_*.py`), provisioning unit checks (`tests/context/test_*.py`, `tests/stack/test_*.py`), backup and restore scripts (`tests/backup`, skipped without `restic`) |
 | `make test-system` | System roles against a Debian 13 systemd container (Docker) |
 | `make test-site` | The remote full installation (site.yml, check, harness, backup) in that container (`DP_TEST_SITE=1`) |
 | `make test-installer`, `make test-local-mode` | install.sh and the assistant up to the configuration on Debian, Ubuntu and Fedora; local mode hardening (Docker) |
