@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Docker CE from Docker's official Debian repository (not Debian's docker.io).
+# Reference: https://docs.docker.com/engine/install/debian/
+
+docker_apt_uri: https://download.docker.com/linux/debian
+docker_apt_suite: trixie
+docker_apt_components: [stable]
+# Repository signing key, vendored in files/ (no expiry date), from
+# https://download.docker.com/linux/debian/gpg
+# fingerprint 9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF CD88.
+docker_keyring_src: docker-archive-keyring.asc
+docker_keyring: /etc/apt/keyrings/docker.asc
+
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+# Useful recommendations of docker-ce (recommendations are not installed by default):
+# AppArmor profile for containers, faster and xz-compressed image layers.
+docker_extra_packages:
+  - apparmor
+  - pigz
+  - xz-utils
+# Unofficial packages that conflict with Docker CE.
+docker_conflicting_packages:
+  - docker.io
+  - docker-doc
+  - docker-compose
+  - podman-docker
+  - containerd
+  - runc
+
+docker_daemon_config:
+  log-driver: local
+  log-opts:
+    max-size: 10m
+    max-file: "5"
+  live-restore: true
+  userland-proxy: false

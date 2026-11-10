@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Reloads the demo: drops the demo site, then recreates it with fresh test data
+# (bin/dokopilot demo-reset <client>). Refused with the production profile.
+# The assistants keep their API keys, so the workstation harness keeps working.
+- name: Drop the demo site
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+  tasks:
+    - name: Drop the demo site
+      ansible.builtin.include_role:
+        name: demo_data
+        tasks_from: reset
+
+- name: Recreate the site and load the test data
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+    - role: dokos
+    - role: dokos_config
+    - role: demo_data

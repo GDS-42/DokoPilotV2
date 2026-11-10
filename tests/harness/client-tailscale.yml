@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Layered on clients/demo/client.yml by run.sh: tailscale mode, opencode only, OpenCode 1
+# shapes (static rules), no mail and no calendar. The public key is a throwaway test key.
+maintenance:
+  users:
+    - name: integrateur
+      ssh_public_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICdlz24XChizBwhFPp6gSD44SkpfKjNkaDkSJAQyvIlB test@example"]
+  sudo_requires_password: true
+
+network:
+  mode: tailscale
+
+harness:
+  default: opencode
+  enabled: [opencode]
+  opencode_version: 1

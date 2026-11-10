@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Builds the effective configuration `dp` and validates it before any change.
+# Failure messages are in French: they are read by the integrator.
+
+- name: Collect the client settings passed with -e @client.yml
+  ansible.builtin.set_fact:
+    _dp_names: "{{ query('ansible.builtin.varnames', '^(' ~ (dokopilot_defaults.keys() | join('|')) ~ ')$') }}"
+
+- name: Merge defaults, profile defaults and client settings
+  vars:
+    _dp_user: "{{ dict(_dp_names | zip(query('ansible.builtin.vars', *_dp_names))) if _dp_names | length > 0 else {} }}"
+    _dp_profile: "{{ _dp_user.profile | default(dokopilot_defaults.profile) }}"
+  ansible.builtin.set_fact:
+    dp: >-
+      {{ dokopilot_defaults
+         | combine(dokopilot_profile_defaults[_dp_profile] | default({}), _dp_user, recursive=True) }}
+
+- name: Derive names that have a sensible default
+  ansible.builtin.set_fact:
+    dp: >-
+      {{ dp | combine({
+           'server': {'hostname': dp.server.hostname or ('dokopilot-' ~ dp.client.id)},
+           'network': {'tailscale': {'hostname': dp.network.tailscale.hostname or ('dokos-' ~ dp.client.id)}},
+           'dokos': {'site_name': dp.dokos.site_name or (dp.client.id ~ '.dokopilot.internal'),
+                     'admin_email': dp.dokos.admin_email or dp.users.entrepreneur.email}
+         }, recursive=True) }}
+
+- name: Start the list of maintenance accounts afresh (the role runs once per play)
+  ansible.builtin.set_fact:
+    _dp_maintenance_users: []
+
+- name: Read the maintenance public keys given as files on the workstation
+  ansible.builtin.set_fact:
+    _dp_maintenance_users: >-
+      {{ _dp_maintenance_users | default([]) + [item | combine({
+           'ssh_public_keys': (item.ssh_public_keys | default([]))
+             + (query('ansible.builtin.file', *(item.ssh_public_key_files | default([]) | map('expanduser') | list))
+                if item.ssh_public_key_files | default([]) | length > 0 else [])
+         })] }}
+  loop: "{{ dp.maintenance.users }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Store the normalised maintenance accounts
+  ansible.builtin.set_fact:
+    dp: "{{ dp | combine({'maintenance': {'users': _dp_maintenance_users | default([])}}, recursive=True) }}"
+
+- name: Check the profile and the client identity
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.profile in ['demo', 'production']
+      - dp.client.id is match('^[a-z0-9][a-z0-9-]{1,30}$')
+      - dp.client.company_name | length > 0
+      - dp.client.company_abbr is match('^[A-Za-z0-9]{2,5}$')
+      - dp.client.country == 'France'
+      - dp.profile == 'demo' or dp.client.siren is match('^[0-9]{9}$')
+    fail_msg: >-
+      Configuration client invalide : vérifiez profile (demo ou production), client.id
+      (minuscules, chiffres, tirets), client.company_name, client.company_abbr (2 à 5
+      caractères) et, en production, client.siren (9 chiffres).
+
+- name: Check the maintenance accounts
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.maintenance.users | length > 0
+      - item.name is match('^[a-z_][a-z0-9_-]{0,31}$')
+      - item.name not in ['root', 'admin', 'debian', 'ubuntu', 'frappe']
+      - item.ssh_public_keys | default([]) | length > 0
+      - item.ssh_public_keys | select('match', dokopilot_ssh_key_regex) | list | length == item.ssh_public_keys | length
+    fail_msg: >-
+      Compte de maintenance « {{ item.name | default('?') }} » invalide : il faut un nom
+      nominatif (pas root, admin, debian…) et au moins une vraie clé SSH publique
+      (la clé d'exemple « remplacez-moi » n'est pas acceptée).
+  loop: "{{ dp.maintenance.users }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Check the network exposure
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.network.mode in ['lan', 'tailscale']
+      - dp.profile == 'demo' or dp.network.mode == 'tailscale'
+      - dp.network.mode != 'lan' or dp.network.lan.allowed_cidrs | length > 0
+      - dp.network.mode != 'lan' or dp.network.lan.allowed_cidrs | select('match', dokopilot_private_cidr_regex) | list | length
+        == dp.network.lan.allowed_cidrs | length
+    fail_msg: >-
+      Exposition réseau invalide : en production, Dokos n'est joignable que par Tailscale
+      (network.mode: tailscale). Le mode lan est réservé au profil demo et à des réseaux privés.
+
+- name: Check the business settings
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.users.entrepreneur.email is match('^[^@\s]+@[^@\s]+$')
+      - dp.users.entrepreneur.first_name | length > 0
+      - dp.users.assistants | map(attribute='email') | select('match', '^[^@\s]+@[^@\s]+$') | list | length == dp.users.assistants | length
+      - dp.users.assistants | map(attribute='for') | difference([dp.users.entrepreneur.email]) | length == 0
+      - dp.etransactions.environment in ['sandbox', 'production']
+      - dp.harness.default in ['opencode', 'claude-code']
+      - dp.harness.enabled | difference(['opencode', 'claude-code']) | length == 0
+    fail_msg: >-
+      Réglages métier invalides : vérifiez users.entrepreneur, users.assistants (chaque
+      assistant agit pour une personne déclarée), etransactions.environment et harness.
+
+- name: Check the production safeguards
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - not dp.demo.load_test_data
+      - dp.backup.repository is match('^[a-z0-9]+:')
+      - dp.backup.repository is not search('\\.(invalid|example)(/|:|$)')
+    fail_msg: >-
+      En production : aucune donnée de test (demo.load_test_data: false) et un dépôt de
+      sauvegarde distant et réel (backup.repository de la forme s3:…, sftp:…, rest:…, pas
+      l'exemple « s3.example.invalid »), car une sauvegarde sur le même serveur n'en est pas une.
+  when: dp.profile == 'production'
+
+- name: Check that the required secrets are present
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - secrets is defined
+      - secrets is mapping
+      - (dokopilot_required_secrets + (['maintenance_sudo_password'] if dp.maintenance.sudo_requires_password else []))
+        | reject('in', secrets | default({}) | dict2items | rejectattr('value', 'in', ['', 'generate', none]) | map(attribute='key') | list)
+        | list | length == 0
+    fail_msg: >-
+      Secrets manquants : lancez les commandes avec bin/dokopilot, qui déchiffre
+      clients/<client>/secrets.yml.age, et vérifiez qu'aucune valeur obligatoire n'est
+      vide ou « generate ».
+  no_log: true

@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Mail connector (mcp-email-server, legacy TOML mode): read and drafts only. The password is
+# typed by the entrepreneur on this computer once, then kept in ~/.config/dokopilot/<client>.
+# It never goes into the client's secrets, the workspace or the agent's environment.
+
+- name: Check whether the mail password is already stored on this computer
+  ansible.builtin.stat:
+    path: "{{ harness_mail_password_file }}"
+  register: _harness_mail_password_stat
+
+- name: Ask the entrepreneur for the mail password
+  ansible.builtin.pause:
+    prompt: >-
+      Mot de passe de la messagerie {{ dp.harness.mail.username }} sur {{ dp.harness.mail.imap_host }}
+      (mot de passe d'application conseillé ; la saisie reste masquée)
+    echo: false
+  register: _harness_mail_password_prompt
+  no_log: true
+  when:
+    - not _harness_mail_password_stat.stat.exists
+    - harness_mail_password is not defined
+
+- name: Store the mail password on this computer
+  ansible.builtin.copy:
+    content: "{{ harness_mail_password if harness_mail_password is defined else _harness_mail_password_prompt.user_input }}"
+    dest: "{{ harness_mail_password_file }}"
+    mode: "0600"
+  no_log: true
+  when: not _harness_mail_password_stat.stat.exists
+
+- name: Check whether the stored mail password is empty
+  ansible.builtin.set_fact:
+    _harness_mail_password_ok: "{{ lookup('ansible.builtin.file', harness_mail_password_file, rstrip=false) | length > 0 }}"
+  no_log: true
+
+- name: Refuse an empty mail password
+  ansible.builtin.fail:
+    msg: >-
+      Le mot de passe de messagerie enregistré est vide : supprimez
+      {{ harness_mail_password_file }}, puis relancez « bin/dokopilot harness {{ dp.client.id }} ».
+  when: not _harness_mail_password_ok | bool
+
+- name: Create the private folder of the mail connector
+  ansible.builtin.file:
+    path: "{{ harness_mail_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Write the configuration of the mail connector
+  vars:
+    _harness_mail_password: "{{ lookup('ansible.builtin.file', harness_mail_password_file, rstrip=false) }}"
+  ansible.builtin.template:
+    src: "{{ harness_source_dir }}/templates/mail/config.toml.j2"
+    dest: "{{ harness_mail_config_file }}"
+    mode: "0600"
+    backup: true
+  no_log: true

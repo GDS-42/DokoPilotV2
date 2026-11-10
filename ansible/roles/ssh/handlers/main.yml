@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# A reload (SIGHUP) makes sshd re-execute itself with the new settings, port included, and
+# runs `sshd -t` first: with a broken configuration the running daemon is kept, and open
+# sessions are never cut.
+- name: Reload ssh
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: reloaded

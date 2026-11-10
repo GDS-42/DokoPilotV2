@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Base host settings. Client-specific values (host name, time zone) come from `dp`.
+
+base_packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - sudo
+  - nftables
+  - fail2ban
+  - python3-systemd
+  - unattended-upgrades
+  - apt-listchanges
+  - needrestart
+  - systemd-timesyncd
+  - locales
+  - jq
+  - rsync
+
+# Locales generated on the server; the first one is the default system language.
+base_locales:
+  - fr_FR.UTF-8
+  - en_US.UTF-8
+base_default_locale: fr_FR.UTF-8
+
+# Security updates are installed automatically; the server never reboots on its own
+# unless the integrator enables it here.
+base_automatic_reboot: false
+base_automatic_reboot_time: "04:00"
+
+# Origins accepted by unattended-upgrades (fields of each repository's Release file).
+# Docker: https://download.docker.com/linux/debian/dists/trixie/Release (Origin: Docker, Label: Docker CE)
+# Tailscale: https://pkgs.tailscale.com/stable/debian/dists/trixie/Release (Origin: Tailscale, Label: Tailscale)
+base_unattended_origins:
+  - "origin=Debian,codename=${distro_codename},label=Debian"
+  - "origin=Debian,codename=${distro_codename}-updates,label=Debian"
+  - "origin=Debian,codename=${distro_codename},label=Debian-Security"
+  - "origin=Debian,codename=${distro_codename}-security,label=Debian-Security"
+  - "origin=Docker,label=Docker CE"
+  - "origin=Tailscale,label=Tailscale"
+
+# Kernel hardening. Forwarding stays enabled: Docker and Tailscale need it.
+base_sysctl_file: /etc/sysctl.d/90-dokopilot.conf
+base_sysctl:
+  kernel.kptr_restrict: 1
+  kernel.dmesg_restrict: 1
+  fs.protected_symlinks: 1
+  fs.protected_hardlinks: 1
+  net.ipv4.ip_forward: 1
+  net.ipv4.tcp_syncookies: 1
+  # Loose reverse-path filtering (2): strict mode breaks Tailscale's asymmetric routes.
+  net.ipv4.conf.all.rp_filter: 2
+  net.ipv4.conf.default.rp_filter: 2
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv4.conf.all.secure_redirects: 0
+  net.ipv4.conf.default.secure_redirects: 0
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.default.send_redirects: 0
+  net.ipv6.conf.all.accept_redirects: 0
+  net.ipv6.conf.default.accept_redirects: 0
+
+base_journald_system_max_use: 500M
+
+# Swap file created when the server has less memory than the threshold and no swap at all.
+# Set base_swap_size_mb to 0 to never create one.
+base_swap_file: /swapfile
+base_swap_size_mb: 4096
+base_swap_ram_threshold_mb: 8192

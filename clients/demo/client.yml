@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Client de démonstration, pour une VM locale avec des données de test.
+# Vos réglages propres (adresse de la VM, compte de maintenance) vont dans
+# clients/demo/client.local.yml, créé par `bin/dokopilot init demo` et ignoré par Git.
+profile: demo
+
+client:
+  id: demo
+  company_name: "Atelier Démo"
+  company_abbr: "AD"
+
+server:
+  address: 192.168.122.10
+  hostname: dokopilot-demo
+
+maintenance:
+  users:
+    - name: integrateur
+      full_name: "Intégrateur"
+      ssh_public_key_files:
+        - ~/.ssh/id_ed25519.pub
+  sudo_requires_password: true
+
+network:
+  mode: lan
+
+dokos:
+  site_name: erp.demo.local
+  admin_email: admin@demo.local
+
+users:
+  entrepreneur:
+    email: camille.martin@atelier-demo.test
+    first_name: Camille
+    last_name: Martin
+  assistants:
+    - for: camille.martin@atelier-demo.test
+      email: assistant.camille@atelier-demo.test
+
+etransactions:
+  enabled: true
+  environment: sandbox
+
+backup:
+  repository: /var/backups/dokopilot/restic
+
+demo:
+  load_test_data: true

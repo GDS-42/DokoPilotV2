@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Runs one provisioning step of stack/provisioning/run.py in the backend container.
+# Input:  dokos_step (name), dokos_step_payload (dict, sent on stdin, never on a
+#         command line), dokos_step_no_log (default true: the payload may hold secrets).
+# Output: dokos_step_result (the JSON result of the step).
+
+- name: "Provisioning step: {{ dokos_step }}"
+  community.docker.docker_compose_v2_exec:
+    project_src: "{{ dokopilot_stack_dir }}"
+    service: backend
+    argv:
+      - /home/frappe/frappe-bench/env/bin/python
+      - /opt/dokopilot/provisioning/run.py
+      - "{{ dokos_step }}"
+    stdin: "{{ dokos_step_payload | to_json }}"
+    chdir: /home/frappe/frappe-bench/sites
+    tty: false
+  register: _dokos_step_raw
+  changed_when: _dokos_step_raw.rc == 0 and (_dokos_step_raw.stdout | from_json).changed | default(false) | bool
+  failed_when: false
+  no_log: "{{ dokos_step_no_log | default(true) | bool }}"
+
+- name: "Read the result of {{ dokos_step }}"
+  ansible.builtin.set_fact:
+    dokos_step_result: >-
+      {{ _dokos_step_raw.stdout_lines | default([]) | select('match', '^\{') | last | default('{}') | from_json }}
+  no_log: "{{ dokos_step_no_log | default(true) | bool }}"
+
+- name: "Stop when this step failed: {{ dokos_step }}"
+  ansible.builtin.fail:
+    msg: >-
+      Étape de provisionnement « {{ dokos_step }} » en échec :
+      {{ dokos_step_result.msg | default('pas de résultat (code ' ~ (_dokos_step_raw.rc | default('?')) ~ ')') }}.
+      Détails côté serveur : docker compose -f {{ dokopilot_stack_dir }}/compose.yaml logs backend
+  when: _dokos_step_raw.rc | default(1) != 0

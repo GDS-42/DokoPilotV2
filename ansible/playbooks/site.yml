@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Full installation or update of one client server. Run it with `bin/dokopilot install <client>`.
+- name: System hardening, maintenance access, firewall, Tailscale, Docker
+  ansible.builtin.import_playbook: system.yml
+
+- name: Dokos stack, site, configuration, demo data, backups
+  ansible.builtin.import_playbook: dokos.yml
+
+- name: Access to Dokos and summary
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+    - role: proxy
+  tasks:
+    - name: Print the summary for the integrator
+      ansible.builtin.debug:
+        msg:
+          - "Installation terminée pour {{ dp.client.company_name }} (profil {{ dp.profile }})."
+          - "Dokos : {{ dokopilot_dokos_url | default('voir le rôle proxy') }}"
+          - "Entrepreneur : {{ dp.users.entrepreneur.email }} — mot de passe initial : bin/dokopilot secrets {{ dp.client.id }} show entrepreneur_password"
+          - "Administrateur : Administrator — bin/dokopilot secrets {{ dp.client.id }} show dokos_admin_password"
+          - "Assistants : {{ dp.users.assistants | map(attribute='email') | join(', ') }} (jetons sur le serveur, récupérés par bin/dokopilot harness)"
+          - "Contrôles : bin/dokopilot check {{ dp.client.id }} — poste de l'entrepreneur : bin/dokopilot harness {{ dp.client.id }}"

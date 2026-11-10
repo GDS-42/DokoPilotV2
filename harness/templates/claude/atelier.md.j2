@@ -1,0 +1,14 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Claude Code agent "atelier", started with `claude --agent atelier`. The body is empty on
+    purpose, so that Claude Code keeps its default (software engineering) system prompt;
+    AGENTS.md describes the Atelier context. No mail and no calendar tools. -#}
+{%- set description = 'Contexte Atelier, ouvert avec « claude --agent atelier » : le travail technique de ' ~ dp.client.company_name
+      ~ ' (scripts, exports, petites applications sur l’API de Dokos) dans le dossier de travail, sans messagerie ni agenda.'
+      ~ ' Réservé à la session principale : ne pas lancer comme sous-agent.' %}
+---
+name: atelier
+description: {{ description | to_json }}
+disallowedTools:
+  - "mcp__{{ harness_mail_server }}__*"
+  - "mcp__{{ harness_calendar_server }}__*"
+---

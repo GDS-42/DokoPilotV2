@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+profile: production
+exclude_paths:
+  - .venv/
+  - .collections/
+  - clients/
+  - .github/
+use_default_rules: true
+skip_list:
+  - var-naming[no-role-prefix]

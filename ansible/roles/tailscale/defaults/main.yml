@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Tailscale from its official Debian repository (used when dp.network.mode == 'tailscale').
+# Reference: https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list
+
+tailscale_apt_uri: https://pkgs.tailscale.com/stable/debian
+tailscale_apt_suite: trixie
+tailscale_apt_components: [main]
+# Repository signing key, vendored in files/ (no expiry date), from
+# https://pkgs.tailscale.com/stable/debian/trixie.gpg
+# fingerprint 2596 A99E AAB3 3821 893C  0A79 458C A832 957F 5868.
+tailscale_keyring_src: tailscale-archive-keyring.asc
+tailscale_keyring: /usr/share/keyrings/tailscale-archive-keyring.asc
+tailscale_packages: [tailscale]
+
+# `tailscale up` gives up after this delay instead of waiting forever.
+tailscale_up_timeout: 120s
+# The auth key is passed to the CLI as "file:<path>" so it never appears in a command line.
+tailscale_auth_key_file: /run/dokopilot-tailscale-authkey

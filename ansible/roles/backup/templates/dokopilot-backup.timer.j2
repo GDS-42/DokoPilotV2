@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later #}
+# Managed by DokoPilot (Ansible): local changes are overwritten.
+[Unit]
+Description=Sauvegarde DokoPilot quotidienne
+
+[Timer]
+OnCalendar={{ dp.backup.schedule }}
+RandomizedDelaySec={{ backup_randomized_delay }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

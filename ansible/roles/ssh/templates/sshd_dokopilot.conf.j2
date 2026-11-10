@@ -1,0 +1,24 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later #}
+# Managed by DokoPilot (Ansible): local changes are overwritten.
+# Read before the rest of sshd_config: the first value of each keyword wins.
+Port {{ dp.server.ssh_port }}
+
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+# Only the file managed by the maintenance role (Debian also reads authorized_keys2).
+AuthorizedKeysFile .ssh/authorized_keys
+AllowGroups {{ ssh_allow_group }}
+MaxAuthTries {{ ssh_max_auth_tries }}
+LoginGraceTime {{ ssh_login_grace_time }}
+
+X11Forwarding no
+AllowAgentForwarding no
+# Local forwarding lets a maintainer reach services bound to 127.0.0.1 (ssh -L).
+AllowTcpForwarding local
+PermitTunnel no
+
+ClientAliveInterval {{ ssh_client_alive_interval }}
+ClientAliveCountMax {{ ssh_client_alive_count_max }}

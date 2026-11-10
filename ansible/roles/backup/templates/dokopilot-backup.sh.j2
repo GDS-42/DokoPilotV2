@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Managed by DokoPilot (Ansible): local changes are overwritten.
+#
+# Sauvegarde de Dokos : `bench backup --with-files` dans le conteneur backend, puis
+# envoi chiffré par restic de ces fichiers et de la configuration de la pile (sans son
+# .env), rétention, puis vérification rapide du dépôt. Lancée chaque jour par
+# {{ backup_unit_name }}.timer, ou à la demande : bin/dokopilot backup <client>.
+#   dokopilot-backup [--pre-restore]
+# --pre-restore : sauvegarde de l'état actuel juste avant une restauration, étiquetée
+# « dokopilot-pre-restore » (hors de la rétention quotidienne ; les 5 dernières sont gardées).
+set -euo pipefail
+umask 077
+
+stack_dir={{ dokopilot_stack_dir | quote }}
+site={{ dp.dokos.site_name | quote }}
+host_dir={{ dokopilot_bench_backup_dir | quote }}
+env_file={{ backup_env_file | quote }}
+keep_daily={{ dp.backup.keep.daily | int }}
+keep_weekly={{ dp.backup.keep.weekly | int }}
+keep_monthly={{ dp.backup.keep.monthly | int }}
+{% raw %}
+
+tag=dokopilot
+case "${1:-}" in
+  "") ;;
+  --pre-restore) tag=dokopilot-pre-restore ;;
+  *) echo "Option inconnue : $1 (attendu : --pre-restore)" >&2; exit 2 ;;
+esac
+
+exec 9>/run/lock/dokopilot-backup.lock
+if ! flock -n 9; then
+  echo "Une sauvegarde ou une restauration est déjà en cours." >&2
+  exit 1
+fi
+
+set -a
+# shellcheck disable=SC1090
+. "$env_file"
+set +a
+
+compose() {
+  docker compose --project-directory "$stack_dir" -f "$stack_dir/compose.yaml" "$@"
+}
+
+work="$host_dir/current"
+rm -rf "$work"
+install -d -o 1000 -g 0 -m 0750 "$work"
+
+echo "Sauvegarde du site $site (base et fichiers)…"
+compose exec -T backend bench --site "$site" backup --with-files --backup-path /home/frappe/backups/current
+
+shopt -s nullglob
+databases=("$work"/*-database.sql.gz)
+if (( ${#databases[@]} != 1 )); then
+  echo "bench backup n'a pas produit de sauvegarde de la base dans $work." >&2
+  exit 1
+fi
+
+echo "Envoi vers le dépôt restic…"
+restic backup --quiet --tag "$tag" --tag "site:$site" \
+  --exclude "$stack_dir/.env" \
+  "$work" "$stack_dir"
+
+if [[ "$tag" == dokopilot ]]; then
+  echo "Rétention : $keep_daily jours, $keep_weekly semaines, $keep_monthly mois…"
+  restic forget --quiet --tag dokopilot --prune \
+    --keep-daily "$keep_daily" --keep-weekly "$keep_weekly" --keep-monthly "$keep_monthly"
+else
+  restic forget --quiet --tag "$tag" --keep-last 5 --prune
+fi
+
+echo "Vérification du dépôt…"
+restic check --quiet
+
+rm -rf "$work"
+restic snapshots --tag "$tag" --latest 1 --compact
+echo "Sauvegarde terminée."
+{% endraw %}

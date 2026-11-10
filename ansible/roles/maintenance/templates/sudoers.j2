@@ -1,0 +1,10 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later #}
+# Managed by DokoPilot (Ansible): local changes are overwritten.
+Defaults use_pty
+Defaults logfile={{ maintenance_sudo_log }}
+Defaults:%{{ maintenance_group }} timestamp_timeout={{ maintenance_sudo_timestamp_timeout }}
+{% if dp.maintenance.sudo_requires_password %}
+%{{ maintenance_group }} ALL=(ALL:ALL) ALL
+{% else %}
+%{{ maintenance_group }} ALL=(ALL:ALL) NOPASSWD: ALL
+{% endif %}

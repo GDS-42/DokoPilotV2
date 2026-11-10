@@ -12,7 +12,7 @@ Tout se règle dans **un seul fichier par client** (`clients/<client>/client.yml
 
 ## Démarrage rapide : tester sur une VM locale avec des données de test
 
-Il vous faut un poste Linux, macOS ou Windows avec WSL, Python 3.11+, `age`, une clé SSH (`ssh-keygen -t ed25519`) et une VM Debian 13 amd64 de 4 vCPU, 8 Go de RAM et 40 Go de disque ([docs/vm-locale.md](docs/vm-locale.md) explique comment la créer).
+Il vous faut un poste Linux, macOS ou Windows avec WSL, Python 3.12+ avec `venv`, `make`, `age`, une clé SSH (`ssh-keygen -t ed25519`) et une VM Debian 13 amd64 de 4 vCPU, 8 Go de RAM et 40 Go de disque ([docs/vm-locale.md](docs/vm-locale.md) explique comment la créer).
 
 ```bash
 git clone https://github.com/GDS-42/DokoPilotV2.git && cd DokoPilotV2
@@ -42,6 +42,7 @@ Claude Code peut piloter ces étapes depuis le poste de l'intégrateur : il lit 
 | [Architecture](docs/architecture.md) | Les briques, les flux, ce qui tourne où |
 | [Décisions](docs/decisions.md) | Les choix tranchés et leurs raisons |
 | [VM locale](docs/vm-locale.md) | Créer la VM de test et y installer la démo |
+| [VM Hyper-V](docs/vm-hyperv.md) | Le même essai pas à pas sous Windows : Hyper-V, WSL et Claude Code |
 | [Installation](docs/installation.md) | Mise en production chez un client |
 | [Sécurité](docs/securite.md) | Exposition, accès de maintenance, droits des assistants, secrets |
 | [Exploitation](docs/exploitation.md) | Sauvegardes, restauration, mises à jour, supervision |

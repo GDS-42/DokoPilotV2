@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Validates a client configuration and prints the effective settings (no change on the server).
+- name: Show the effective configuration
+  hosts: dokopilot
+  gather_facts: false
+  roles:
+    - role: config
+  tasks:
+    - name: Print the effective configuration
+      ansible.builtin.debug:
+        var: dp

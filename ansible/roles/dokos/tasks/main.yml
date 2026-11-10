@@ -1,0 +1,259 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Dokos stack: derived image (built on the server when its inputs change), Docker
+# Compose project, site with its apps. Reads `dp` and `secrets` only.
+
+- name: Check that the server can run the official Dokos image
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - ansible_facts['architecture'] == 'x86_64'
+    fail_msg: >-
+      L'image officielle de Dokos n'existe qu'en amd64 (x86_64) ; ce serveur est en
+      {{ ansible_facts['architecture'] }}. Choisissez un serveur ou une VM amd64.
+
+- name: Check that the database password fits in the Compose environment file
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - secrets.db_root_password is string
+      - "\"'\" not in secrets.db_root_password"
+      - "'\n' not in secrets.db_root_password"
+    fail_msg: >-
+      secrets.db_root_password ne doit contenir ni apostrophe ni retour à la ligne
+      (bin/dokopilot secrets <client> edit).
+  no_log: true
+
+- name: Install the Python library used by the Docker modules of Ansible
+  ansible.builtin.apt:
+    name: python3-requests
+    state: present
+    install_recommends: false
+
+- name: Compute the image name and the address of Dokos
+  vars:
+    _inputs:
+      - "{{ lookup('ansible.builtin.file', dokos_stack_src ~ '/image/Containerfile') }}"
+      - "{{ dokos_base_image }}:{{ dokos_version }}@{{ dokos_base_digest }}"
+      - "{{ dokos_ai_repo }} {{ dokos_ai_tag }} {{ dokos_ai_commit }}"
+  ansible.builtin.set_fact:
+    dokos_build_id: "{{ (_inputs | join('\n')) | hash('sha256') }}"
+    dokos_image: "{{ dokos_image_name }}:{{ dokos_version }}-{{ ((_inputs | join('\n')) | hash('sha256'))[:12] }}"
+    dokos_base_ref: "{{ dokos_base_image }}:{{ dokos_version }}@{{ dokos_base_digest }}"
+
+- name: Read the MagicDNS name of the server
+  ansible.builtin.command: tailscale status --json
+  register: _dokos_ts_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - dokos_url | length == 0
+    - dokopilot_dokos_url is not defined
+    - dp.network.mode == 'tailscale'
+
+- name: Choose the address Dokos uses in its links
+  vars:
+    _ts: "{{ _dokos_ts_status.stdout | default('') | from_json if (_dokos_ts_status.rc | default(1)) == 0 else {} }}"
+    _ts_name: "{{ (_ts.Self | default({})).DNSName | default('') | regex_replace('\\.$', '') }}"
+  ansible.builtin.set_fact:
+    dokos_site_url: >-
+      {{ dokos_url if dokos_url | length > 0
+         else dokopilot_dokos_url if dokopilot_dokos_url is defined
+         else ('http://' ~ dp.server.address) if dp.network.mode == 'lan' and dp.server.address | length > 0
+         else (('https://' if dp.network.tailscale.https else 'http://') ~ _ts_name) if _ts_name | length > 0
+         else '' }}
+
+- name: Create the stack directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ dokopilot_stack_dir }}", mode: "0750" }
+    - { path: "{{ dokopilot_stack_dir }}/image", mode: "0750" }
+    - { path: "{{ dokopilot_stack_dir }}/provisioning", mode: "0755" }
+    - { path: "{{ dokopilot_stack_dir }}/demo", mode: "0755" }
+    - { path: "{{ dokopilot_etc_dir }}", mode: "0750" }
+    # Written by the frappe user (uid 1000) of the containers.
+    - { path: "{{ dokopilot_bench_backup_dir | dirname }}", mode: "0750" }
+    - { path: "{{ dokopilot_bench_backup_dir }}", owner: "1000", group: "0", mode: "0750" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Copy the image build context
+  ansible.builtin.copy:
+    src: "{{ dokos_stack_src }}/image/Containerfile"
+    dest: "{{ dokopilot_stack_dir }}/image/Containerfile"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Copy the provisioning scripts
+  ansible.builtin.copy:
+    src: "{{ dokos_stack_src }}/provisioning/"
+    dest: "{{ dokopilot_stack_dir }}/provisioning/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Look for the derived image
+  community.docker.docker_image_info:
+    name: "{{ dokos_image }}"
+  register: _dokos_image_info
+
+- name: Build the derived image
+  when: _dokos_image_info.images | length == 0
+  block:
+    - name: Pull the official Dokos image (pinned by digest)
+      community.docker.docker_image_pull:
+        name: "{{ dokos_base_ref }}"
+        platform: linux/amd64
+        pull: not_present
+
+    - name: Build the image with Dokos AI (several minutes)
+      community.docker.docker_image_build:
+        name: "{{ dokos_image_name }}"
+        tag: "{{ dokos_image.split(':') | last }}"
+        path: "{{ dokopilot_stack_dir }}/image"
+        dockerfile: Containerfile
+        platform: linux/amd64
+        pull: false
+        network: "{{ dokos_build_network | default(omit, true) }}"
+        args: >-
+          {{ dokos_build_args | combine({
+               'DOKOS_BASE_IMAGE': dokos_base_ref,
+               'DOKOS_AI_REPO': dokos_ai_repo,
+               'DOKOS_AI_TAG': dokos_ai_tag,
+               'DOKOS_AI_COMMIT': dokos_ai_commit,
+               'DOKOPILOT_BUILD_ID': dokos_build_id}) }}
+        secrets: >-
+          {{ [{'id': 'build_ca', 'type': 'file', 'src': dokos_build_ca_file}] if dokos_build_ca_file | length > 0 else omit }}
+        labels:
+          io.dokopilot.dokos.version: "{{ dokos_version }}"
+          io.dokopilot.dokos.base-digest: "{{ dokos_base_digest }}"
+
+    - name: Remove the build cache
+      ansible.builtin.command: docker builder prune --force
+      changed_when: true
+      when: dokos_build_prune | bool
+
+    - name: Read the dependency check recorded during the build
+      ansible.builtin.command:
+        argv: [docker, run, --rm, --entrypoint, cat, "{{ dokos_image }}",
+               /home/frappe/frappe-bench/.dokopilot/versions.txt, /home/frappe/frappe-bench/.dokopilot/pip-check.txt]
+      register: _dokos_pip_check
+      changed_when: false
+
+    - name: Show the versions and the dependency check
+      ansible.builtin.debug:
+        msg:
+          - "Image {{ dokos_image }} construite (Dodock, Dokos, eTransactions, Dokos AI) : {{ _dokos_pip_check.stdout_lines | first }}"
+          - "pip check (écart accepté, voir docs/decisions.md D-12) : {{ _dokos_pip_check.stdout_lines[1:] | join(' ; ') or 'aucun conflit' }}"
+
+- name: Write the Compose project
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: "{{ dokopilot_stack_dir }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Write the environment file of the stack (secrets, root only)
+  ansible.builtin.copy:
+    dest: "{{ dokopilot_stack_dir }}/.env"
+    content: |
+      # Managed by DokoPilot (Ansible). Secrets: root only, never in Git.
+      DB_ROOT_PASSWORD='{{ secrets.db_root_password }}'
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Write the bench settings (configurator)
+  community.docker.docker_compose_v2_run:
+    project_src: "{{ dokopilot_stack_dir }}"
+    service: configurator
+    cleanup: true
+    no_deps: true
+    tty: false
+    detach: false
+  register: _dokos_configurator
+  changed_when: (_dokos_configurator.stdout | from_json).changed | bool
+
+# Docker Hub limits anonymous pulls per address: pull explicitly, with retries, before the
+# stack starts (compose itself would fail at the first refusal).
+- name: Pull the database and cache images (pinned by digest)
+  community.docker.docker_image_pull:
+    name: "{{ item | regex_replace(':[^/@]+@', '@') }}"
+    pull: not_present
+  loop:
+    - "{{ dokos_mariadb_image }}"
+    - "{{ dokos_valkey_image }}"
+  register: _dokos_service_pull
+  retries: 5
+  delay: 30
+  until: _dokos_service_pull is succeeded
+
+- name: Start the stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ dokopilot_stack_dir }}"
+    state: present
+    remove_orphans: true
+    wait: true
+    wait_timeout: "{{ dokos_wait_timeout }}"
+  register: _dokos_compose
+
+- name: Create the site and install the apps
+  ansible.builtin.include_tasks: step.yml
+  vars:
+    dokos_step: ensure-site
+    dokos_step_payload:
+      site: "{{ dp.dokos.site_name }}"
+      apps: "{{ dokos_site_apps }}"
+      db_root_password: "{{ secrets.db_root_password }}"
+      admin_password: "{{ secrets.dokos_admin_password }}"
+      host_name: "{{ dokos_site_url }}"
+      image: "{{ dokos_image }}"
+
+- name: Keep the state of the site
+  ansible.builtin.set_fact:
+    dokos_site_state: "{{ dokos_step_result }}"
+
+- name: Migrate the site to the new image
+  when: dokos_site_state.needs_migrate | bool
+  block:
+    - name: Run bench migrate
+      community.docker.docker_compose_v2_exec:
+        project_src: "{{ dokopilot_stack_dir }}"
+        service: backend
+        argv: [bench, --site, "{{ dp.dokos.site_name }}", migrate]
+        tty: false
+      changed_when: true
+
+    - name: Record the image the site was migrated with
+      ansible.builtin.include_tasks: step.yml
+      vars:
+        dokos_step: mark-image
+        dokos_step_no_log: false
+        dokos_step_payload:
+          site: "{{ dp.dokos.site_name }}"
+          image: "{{ dokos_image }}"
+
+- name: Wait until Dokos answers on 127.0.0.1
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ dokopilot_dokos_http_port }}/api/method/ping"
+    return_content: true
+  register: _dokos_ping
+  until: _dokos_ping.status == 200 and (_dokos_ping.json.message | default('')) == 'pong'
+  retries: 60
+  delay: 5
+  changed_when: false
+
+- name: Show the versions installed on the site
+  ansible.builtin.debug:
+    msg: >-
+      Site {{ dp.dokos.site_name }} :
+      {{ dokos_site_state.versions | dict2items | map('dict2items') | map('map', attribute='value') | map('join', ' ') | join(', ') }}

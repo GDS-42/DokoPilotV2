@@ -1,0 +1,132 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Tailscale: installation, first connection with a one-time auth key, and the facts used by
+# the proxy role and the final summary (dokopilot_tailscale_ip, dokopilot_tailscale_dnsname).
+
+- name: Install the module needed to manage deb822 repository files
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+
+- name: Install the Tailscale repository signing key
+  ansible.builtin.copy:
+    src: "{{ tailscale_keyring_src }}"
+    dest: "{{ tailscale_keyring }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add the Tailscale repository
+  ansible.builtin.deb822_repository:
+    name: tailscale
+    types: [deb]
+    uris: ["{{ tailscale_apt_uri }}"]
+    suites: ["{{ tailscale_apt_suite }}"]
+    components: "{{ tailscale_apt_components }}"
+    architectures: ["{{ tailscale_deb_arch }}"]
+    signed_by: "{{ tailscale_keyring }}"
+    state: present
+
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: "{{ tailscale_packages }}"
+    state: present
+    update_cache: true
+
+- name: Keep tailscaled enabled and running
+  ansible.builtin.systemd_service:
+    name: tailscaled
+    enabled: true
+    state: started
+
+- name: Read the Tailscale state
+  ansible.builtin.command: tailscale status --json
+  register: _ts_status_before
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  retries: 10
+  delay: 3
+  until: _ts_status_before.stdout is search('"BackendState"')
+
+- name: Keep the Tailscale state
+  ansible.builtin.set_fact:
+    _ts_state: "{{ (_ts_status_before.stdout | from_json).BackendState }}"
+
+- name: Stop when the server waits for an approval in the Tailscale console
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _ts_state != 'NeedsMachineAuth'
+    fail_msg: >-
+      Le serveur attend d'être approuvé dans la console Tailscale (page Machines) :
+      approuvez « {{ dp.network.tailscale.hostname }} », puis relancez l'installation.
+
+- name: Connect the server to the Tailscale network
+  when: _ts_state != 'Running'
+  vars:
+    _ts_needs_login: "{{ _ts_state in ['NeedsLogin', 'NoState'] }}"
+  block:
+    - name: Require an auth key for the first connection
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - secrets.tailscale_auth_key | default('', true) | length > 0
+        fail_msg: >-
+          Le serveur n'est pas encore connecté à Tailscale et aucune clé d'authentification
+          n'est fournie. Créez une clé dans la console Tailscale (Settings > Keys ; usage
+          unique conseillé, avec l'étiquette voulue si network.tailscale.advertise_tags est
+          rempli), enregistrez-la dans les secrets du client (tailscale_auth_key) avec
+          « bin/dokopilot secrets <client> edit », puis relancez l'installation.
+      when: _ts_needs_login
+
+    - name: Write the auth key to a private temporary file
+      ansible.builtin.copy:
+        content: "{{ secrets.tailscale_auth_key }}"
+        dest: "{{ tailscale_auth_key_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      when: _ts_needs_login
+      no_log: true
+
+    - name: Join the Tailscale network
+      ansible.builtin.command:
+        argv: >-
+          {{ ['tailscale', 'up',
+              '--hostname=' ~ dp.network.tailscale.hostname,
+              '--timeout=' ~ tailscale_up_timeout]
+             + (['--auth-key=file:' ~ tailscale_auth_key_file] if _ts_needs_login else [])
+             + (['--advertise-tags=' ~ (dp.network.tailscale.advertise_tags | join(','))]
+                if dp.network.tailscale.advertise_tags | length > 0 else []) }}
+      changed_when: true
+
+  always:
+    - name: Remove the temporary auth key file
+      ansible.builtin.file:
+        path: "{{ tailscale_auth_key_file }}"
+        state: absent
+
+- name: Read the Tailscale address and name
+  ansible.builtin.command: tailscale status --json
+  register: _ts_status_after
+  changed_when: false
+  check_mode: false
+
+- name: Keep the Tailscale address and name for the summary
+  vars:
+    _ts: "{{ _ts_status_after.stdout | from_json }}"
+  ansible.builtin.set_fact:
+    _ts_state: "{{ _ts.BackendState }}"
+    dokopilot_tailscale_ip: "{{ _ts.Self.TailscaleIPs | default([]) | reject('search', ':') | first | default('') }}"
+    dokopilot_tailscale_dnsname: "{{ _ts.Self.DNSName | default('') | regex_replace('\\.$', '') }}"
+
+- name: Check that the server is connected to Tailscale
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _ts_state == 'Running'
+      - dokopilot_tailscale_dnsname | length > 0
+    fail_msg: >-
+      Tailscale n'est pas connecté (état : {{ _ts_state }}). Vérifiez la clé
+      d'authentification et la console Tailscale (machine approuvée, MagicDNS activé), puis
+      relancez l'installation.

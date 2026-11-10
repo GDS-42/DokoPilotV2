@@ -1,0 +1,11 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later #}
+// Managed by DokoPilot (Ansible): local changes are overwritten.
+// Read after Debian's 50unattended-upgrades: replaces its list of origins.
+#clear Unattended-Upgrade::Origins-Pattern;
+Unattended-Upgrade::Origins-Pattern {
+{% for origin in base_unattended_origins %}
+        "{{ origin }}";
+{% endfor %}
+};
+Unattended-Upgrade::Automatic-Reboot "{{ base_automatic_reboot | bool | lower }}";
+Unattended-Upgrade::Automatic-Reboot-Time "{{ base_automatic_reboot_time }}";

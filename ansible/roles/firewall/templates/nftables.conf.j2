@@ -1,0 +1,68 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later #}
+#!/usr/sbin/nft -f
+# Managed by DokoPilot (Ansible): local changes are overwritten.
+# Only the table "inet {{ firewall_table }}" is defined here: Docker, Tailscale and fail2ban
+# manage their own tables, which this file never flushes. Declaring, deleting, then
+# redefining the table replaces it atomically whether it exists or not (same effect as
+# "destroy table", without requiring a kernel that supports it).
+{% set ssh_v4 = dp.maintenance.ssh_allowed_from | reject('search', ':') | list %}
+{% set ssh_v6 = dp.maintenance.ssh_allowed_from | select('search', ':') | list %}
+{% set lan_v4 = dp.network.lan.allowed_cidrs | reject('search', ':') | list %}
+{% set lan_v6 = dp.network.lan.allowed_cidrs | select('search', ':') | list %}
+table inet {{ firewall_table }}
+delete table inet {{ firewall_table }}
+
+table inet {{ firewall_table }} {
+{% for name, elements in [('ssh_allowed_v4', ssh_v4), ('ssh_allowed_v6', ssh_v6), ('lan_allowed_v4', lan_v4), ('lan_allowed_v6', lan_v6)] %}
+{%   if elements and (name.startswith('ssh') or dp.network.mode == 'lan') %}
+    set {{ name }} {
+        type {{ 'ipv6_addr' if name.endswith('v6') else 'ipv4_addr' }}
+        flags interval
+        auto-merge
+        elements = { {{ elements | join(', ') }} }
+    }
+
+{%   endif %}
+{% endfor %}
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        ct state vmap { established : accept, related : accept, invalid : drop }
+        iif "lo" accept
+
+        # Essential ICMP and ICMPv6 (path MTU discovery, neighbour discovery, ping), rate-limited
+        meta l4proto icmp icmp type { echo-request, destination-unreachable, time-exceeded, parameter-problem } limit rate {{ firewall_icmp_limit }} accept
+        meta l4proto ipv6-icmp icmpv6 type { echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem, mld-listener-query } limit rate {{ firewall_icmp_limit }} accept
+        meta l4proto ipv6-icmp icmpv6 type { nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } ip6 hoplimit 255 limit rate {{ firewall_icmp_limit }} accept
+        # DHCPv6 replies, for hosting providers that configure IPv6 that way
+        ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+
+        # SSH maintenance port
+{% if ssh_v4 or ssh_v6 %}
+{%   if ssh_v4 %}
+        tcp dport {{ dp.server.ssh_port }} ip saddr @ssh_allowed_v4 accept
+{%   endif %}
+{%   if ssh_v6 %}
+        tcp dport {{ dp.server.ssh_port }} ip6 saddr @ssh_allowed_v6 accept
+{%   endif %}
+{% else %}
+        tcp dport {{ dp.server.ssh_port }} accept
+{% endif %}
+{% if dp.network.mode == 'tailscale' %}
+
+        # Tailscale: through the tunnel, only Dokos (tailscale serve) and SSH. Direct WireGuard
+        # connections need no inbound rule: Tailscale opens them from the outbound side.
+        iifname "{{ firewall_tailscale_interface }}" tcp dport { {{ 443 if dp.network.tailscale.https | default(true) else 80 }}, {{ dp.server.ssh_port }} } accept
+{% endif %}
+{% if dp.network.mode == 'lan' %}
+
+        # Demo profile: Dokos over HTTP (Caddy), from the private ranges of network.lan.allowed_cidrs
+{%   if lan_v4 %}
+        tcp dport {{ firewall_lan_http_port }} ip saddr @lan_allowed_v4 accept
+{%   endif %}
+{%   if lan_v6 %}
+        tcp dport {{ firewall_lan_http_port }} ip6 saddr @lan_allowed_v6 accept
+{%   endif %}
+{% endif %}
+    }
+}

@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Production needs an off-site backup repository.
+# expect: aucune donnée de test
+profile: production
+client: { siren: "123456789" }
+backup: { repository: /var/backups/restic }

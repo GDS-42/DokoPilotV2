@@ -1,0 +1,506 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""DokoPilot command line: one entry point for every installation step.
+
+Messages are in French (they are read by the integrator); code is in English.
+Secrets are decrypted with age into a private temporary directory for the
+duration of one Ansible run, then deleted.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import secrets as pysecrets
+import shutil
+import subprocess
+import sys
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Iterator
+
+REPO = Path(__file__).resolve().parent.parent
+VENV_PYTHON = REPO / ".venv" / "bin" / "python"
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - depends on the workstation
+    if VENV_PYTHON.exists() and Path(sys.executable).resolve() != VENV_PYTHON.resolve():
+        os.execv(str(VENV_PYTHON), [str(VENV_PYTHON), __file__, *sys.argv[1:]])
+    sys.exit("PyYAML est introuvable : lancez d'abord « make setup » à la racine du dépôt.")
+
+ANSIBLE_DIR = REPO / "ansible"
+CONFIG_DEFAULTS = ANSIBLE_DIR / "roles" / "config" / "defaults" / "main.yml"
+PLAYBOOKS = ANSIBLE_DIR / "playbooks"
+DEFAULT_IDENTITY = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "dokopilot" / "age-identity.txt"
+SECRET_PLACEHOLDER = "generate"
+
+
+class IndentedDumper(yaml.SafeDumper):
+    """Indents block sequences, as yamllint's default configuration expects."""
+
+    def increase_indent(self, flow: bool = False, indentless: bool = False) -> None:
+        super().increase_indent(flow, False)
+
+
+def dump_yaml(data: Any) -> str:
+    return yaml.dump(data, Dumper=IndentedDumper, allow_unicode=True, sort_keys=False)
+
+
+class CliError(Exception):
+    """An error explained to the integrator, in French."""
+
+
+# --------------------------------------------------------------------------- helpers
+
+
+def clients_dir() -> Path:
+    return Path(os.environ.get("DOKOPILOT_CLIENTS_DIR", REPO / "clients")).expanduser()
+
+
+def client_dir(client: str) -> Path:
+    path = clients_dir() / client
+    if not (path / "client.yml").exists():
+        raise CliError(f"Client « {client} » introuvable : {path / 'client.yml'} n'existe pas. Lancez « bin/dokopilot init {client} ».")
+    return path
+
+
+def identity_path() -> Path:
+    return Path(os.environ.get("DOKOPILOT_AGE_IDENTITY", DEFAULT_IDENTITY)).expanduser()
+
+
+def tool(name: str) -> str:
+    venv_tool = REPO / ".venv" / "bin" / name
+    if venv_tool.exists():
+        return str(venv_tool)
+    found = shutil.which(name)
+    if not found:
+        raise CliError(f"Outil « {name} » introuvable. Voir « bin/dokopilot doctor ».")
+    return found
+
+
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def load_yaml(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    if not isinstance(data, dict):
+        raise CliError(f"{path} doit contenir un dictionnaire YAML.")
+    return data
+
+
+def client_files(client: str) -> list[Path]:
+    path = client_dir(client)
+    files = [path / "client.yml"]
+    if (path / "client.local.yml").exists():
+        files.append(path / "client.local.yml")
+    return files
+
+
+def allowed_settings() -> set[str]:
+    """Top-level settings a client file may contain: the keys of dokopilot_defaults."""
+    return set(load_yaml(CONFIG_DEFAULTS).get("dokopilot_defaults", {}))
+
+
+def client_settings(client: str) -> dict[str, Any]:
+    """client.yml deep-merged with client.local.yml, restricted to the documented settings.
+
+    Client files reach Ansible as extra vars, which override every role variable: an
+    unknown top-level key could silently change an internal setting of a role (groups,
+    permissions, checks), so it is refused.
+    """
+    settings: dict[str, Any] = {}
+    for path in client_files(client):
+        settings = deep_merge(settings, load_yaml(path))
+    unknown = sorted(set(settings) - allowed_settings())
+    if unknown:
+        raise CliError(
+            f"Réglages inconnus pour le client « {client} » : {', '.join(unknown)}. Seuls les réglages de "
+            "config/client.example.yml sont acceptés ; les variables internes des rôles ne se changent pas depuis client.yml."
+        )
+    return settings
+
+
+def private_key_for(settings: dict[str, Any], user: str) -> Path | None:
+    """Private key of a maintenance account, from DOKOPILOT_SSH_KEY or next to its declared public key."""
+    if os.environ.get("DOKOPILOT_SSH_KEY"):
+        return Path(os.environ["DOKOPILOT_SSH_KEY"]).expanduser()
+    for account in settings.get("maintenance", {}).get("users", []) or []:
+        if account.get("name") != user:
+            continue
+        for public in account.get("ssh_public_key_files", []) or []:
+            path = Path(public).expanduser()
+            if path.suffix == ".pub" and path.with_suffix("").exists():
+                return path.with_suffix("")
+    return None
+
+
+def ssh_options(key: Path | None) -> list[str]:
+    """Trust a server's key on first use only; offer only the account's key when it is known
+    (sshd allows 3 attempts, and fail2ban counts the failures of keys offered by an agent)."""
+    options = ["-o", "StrictHostKeyChecking=accept-new"]
+    if key is not None:
+        options += ["-o", "IdentitiesOnly=yes", "-i", str(key)]
+    return options
+
+
+def run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, check=True, text=True, **kwargs)
+
+
+# --------------------------------------------------------------------------- secrets (age)
+
+
+def recipients_file(client: str) -> Path:
+    return clients_dir() / client / "recipients.txt"
+
+
+def ensure_identity() -> str:
+    """Return the public key of the local age identity, creating it if needed."""
+    path = identity_path()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        run([tool("age-keygen"), "-o", str(path)], capture_output=True)
+        path.chmod(0o600)
+        print(f"Clé age créée : {path}. Sauvegardez-la dans votre gestionnaire de mots de passe.")
+    out = run([tool("age-keygen"), "-y", str(path)], capture_output=True).stdout.strip()
+    return out
+
+
+def encrypt_secrets(client: str, data: dict[str, Any]) -> None:
+    recipients = recipients_file(client)
+    if not recipients.exists() or not recipients.read_text(encoding="utf-8").strip():
+        raise CliError(f"Aucun destinataire age dans {recipients}.")
+    target = clients_dir() / client / "secrets.yml.age"
+    payload = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    tmp_target = target.with_suffix(".age.tmp")
+    run([tool("age"), "--encrypt", "--armor", "--recipients-file", str(recipients), "--output", str(tmp_target)], input=payload)
+    tmp_target.replace(target)
+
+
+def decrypt_secrets(client: str) -> dict[str, Any]:
+    source = clients_dir() / client / "secrets.yml.age"
+    if not source.exists():
+        raise CliError(f"Secrets introuvables : {source}. Lancez « bin/dokopilot init {client} ».")
+    identity = identity_path()
+    if not identity.exists():
+        raise CliError(f"Clé age introuvable : {identity} (ou variable DOKOPILOT_AGE_IDENTITY).")
+    out = run([tool("age"), "--decrypt", "--identity", str(identity), str(source)], capture_output=True).stdout
+    data = yaml.safe_load(out) or {}
+    if not isinstance(data, dict) or "secrets" not in data:
+        raise CliError(f"{source} ne contient pas de clé « secrets ».")
+    return data
+
+
+@contextmanager
+def private_tempdir() -> Iterator[Path]:
+    path = Path(tempfile.mkdtemp(prefix="dokopilot-"))
+    path.chmod(0o700)
+    try:
+        yield path
+    finally:
+        for child in path.iterdir():
+            child.unlink()
+        path.rmdir()
+
+
+def fill_generated(value: Any) -> Any:
+    if value == SECRET_PLACEHOLDER:
+        return pysecrets.token_urlsafe(24)
+    if isinstance(value, dict):
+        return {key: fill_generated(item) for key, item in value.items()}
+    return value
+
+
+# --------------------------------------------------------------------------- Ansible
+
+
+def inventory(client: str, settings: dict[str, Any], *, user: str | None, local: bool, bootstrap: bool) -> dict[str, Any]:
+    server = settings.get("server", {})
+    maintenance_users = [u.get("name") for u in settings.get("maintenance", {}).get("users", []) if u.get("name")]
+    host: dict[str, Any] = {}
+    if local:
+        host["ansible_connection"] = "local"
+    else:
+        address = server.get("address")
+        if not address:
+            raise CliError("server.address est vide : indiquez l'adresse du serveur dans client.yml ou client.local.yml.")
+        host["ansible_host"] = address
+        host["ansible_port"] = int(server.get("ssh_port", 22) if not bootstrap else server.get("bootstrap_port", server.get("ssh_port", 22)))
+        if bootstrap:
+            host["ansible_user"] = user or server.get("bootstrap_user", "root")
+        else:
+            chosen = user or os.environ.get("DOKOPILOT_SSH_USER") or (maintenance_users[0] if maintenance_users else None)
+            if not chosen:
+                raise CliError("Aucun compte de maintenance déclaré (maintenance.users).")
+            host["ansible_user"] = chosen
+        key = private_key_for(settings, host["ansible_user"]) if not bootstrap or os.environ.get("DOKOPILOT_SSH_KEY") else None
+        host["ansible_ssh_common_args"] = "-o StrictHostKeyChecking=accept-new" + (" -o IdentitiesOnly=yes" if key else "")
+        if key is not None:
+            host["ansible_ssh_private_key_file"] = str(key)
+    if not bootstrap and settings.get("maintenance", {}).get("sudo_requires_password", True):
+        host["ansible_become_password"] = "{{ secrets.maintenance_sudo_password }}"
+    client_id = settings.get("client", {}).get("id", client)
+    return {"dokopilot": {"hosts": {client_id: host}}}
+
+
+def ansible_playbook(client: str, playbook: str, args: argparse.Namespace, *, bootstrap: bool = False, extra: list[str] | None = None) -> int:
+    settings = client_settings(client)
+    data = decrypt_secrets(client)
+    env = dict(os.environ)
+    env["ANSIBLE_CONFIG"] = str(ANSIBLE_DIR / "ansible.cfg")
+    env.setdefault("ANSIBLE_FORCE_COLOR", "1")
+    with private_tempdir() as tmp:
+        inv = tmp / "inventory.yml"
+        inv.write_text(yaml.safe_dump(inventory(client, settings, user=args.user, local=args.local, bootstrap=bootstrap)), encoding="utf-8")
+        # One merged file: Ansible would replace, not merge, a dict given in two -e files.
+        settings_file = tmp / "client.yml"
+        settings_file.write_text(dump_yaml(settings), encoding="utf-8")
+        secrets_file = tmp / "secrets.yml"
+        fd = os.open(secrets_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            yaml.safe_dump({"secrets": data["secrets"]}, handle, allow_unicode=True)
+        cmd = [tool("ansible-playbook"), "-i", str(inv), "-e", f"@{settings_file}"]
+        cmd += ["-e", f"@{secrets_file}", "-e", f"dokopilot_client_dir={clients_dir() / client}"]
+        if args.check:
+            cmd.append("--check")
+        if args.ask_become_pass:
+            cmd.append("--ask-become-pass")
+        cmd += ["-v"] * args.verbose
+        cmd += extra or []
+        cmd.append(str(PLAYBOOKS / playbook))
+        return subprocess.run(cmd, cwd=ANSIBLE_DIR, env=env).returncode
+
+
+# --------------------------------------------------------------------------- commands
+
+
+def cmd_doctor(_: argparse.Namespace) -> int:
+    ok = True
+    checks = [
+        ("python3 ≥ 3.12", sys.version_info >= (3, 12)),
+        ("ansible-playbook", bool(shutil.which("ansible-playbook") or (REPO / ".venv/bin/ansible-playbook").exists())),
+        ("collections Ansible", (REPO / ".collections" / "ansible_collections" / "community" / "docker").exists()),
+        ("age", bool(shutil.which("age"))),
+        ("age-keygen", bool(shutil.which("age-keygen"))),
+        ("ssh", bool(shutil.which("ssh"))),
+        ("clé SSH (~/.ssh/id_ed25519.pub)", (Path.home() / ".ssh" / "id_ed25519.pub").exists()),
+    ]
+    for label, passed in checks:
+        print(f"{'✓' if passed else '✗'} {label}")
+        ok = ok and passed
+    if identity_path().exists():
+        print(f"✓ clé age ({identity_path()})")
+    else:
+        print(f"· clé age ({identity_path()}) : sera créée par « bin/dokopilot init »")
+    if not ok:
+        print("\nInstallez ce qui manque : Python 3.12 ou plus avec venv (Debian, Ubuntu : apt install python3-venv make),"
+              " « make setup » (Ansible), le paquet « age » de votre système, « ssh-keygen -t ed25519 » pour une clé SSH.")
+    return 0 if ok else 1
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    target = clients_dir() / args.client
+    target.mkdir(parents=True, exist_ok=True)
+    client_file = target / "client.yml"
+    if not client_file.exists():
+        text = (REPO / "config" / "client.example.yml").read_text(encoding="utf-8")
+        text = text.replace("profile: demo", f"profile: {args.profile}", 1)
+        text = text.replace("  id: demo ", f"  id: {args.client} ", 1)
+        if args.profile == "production":
+            for before, after in (
+                ("  mode: lan", "  mode: tailscale"),
+                ("  repository: /var/backups/dokopilot/restic", "  repository: \"s3:https://s3.example.invalid/compartiment/dokopilot\"  # à remplacer"),
+                ("  load_test_data: true", "  load_test_data: false"),
+            ):
+                text = text.replace(before, after, 1)
+        client_file.write_text(text, encoding="utf-8")
+        print(f"Créé : {client_file} (à compléter).")
+    local: dict[str, Any] = load_yaml(target / "client.local.yml") if (target / "client.local.yml").exists() else {}
+    if args.address:
+        local = deep_merge(local, {"server": {"address": args.address}})
+    if args.bootstrap_user:
+        local = deep_merge(local, {"server": {"bootstrap_user": args.bootstrap_user}})
+    if args.maintenance_user or args.ssh_key:
+        name = args.maintenance_user or os.environ.get("USER", "integrateur")
+        key = args.ssh_key or "~/.ssh/id_ed25519.pub"
+        local = deep_merge(local, {"maintenance": {"users": [{"name": name, "full_name": name, "ssh_public_key_files": [key]}]}})
+    if local:
+        (target / "client.local.yml").write_text(
+            "# Réglages propres à ce poste (ignoré par Git)\n" + dump_yaml(local), encoding="utf-8"
+        )
+        print(f"Mis à jour : {target / 'client.local.yml'}")
+    recipients = recipients_file(args.client)
+    public_key = ensure_identity()
+    lines = recipients.read_text(encoding="utf-8").split() if recipients.exists() else []
+    for key in [public_key, *(args.recipient or [])]:
+        if key not in lines:
+            lines.append(key)
+    recipients.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    secrets_file = target / "secrets.yml.age"
+    if secrets_file.exists():
+        if args.recipient:
+            encrypt_secrets(args.client, decrypt_secrets(args.client))
+            print("Secrets rechiffrés pour les nouveaux destinataires.")
+        else:
+            print(f"Secrets déjà présents : {secrets_file} (inchangés).")
+    else:
+        template = load_yaml(REPO / "config" / "secrets.example.yml")
+        encrypt_secrets(args.client, fill_generated(template))
+        print(f"Secrets créés et chiffrés : {secrets_file}")
+    print(f"\nÉtape suivante : vérifiez la configuration avec « bin/dokopilot config {args.client} ».")
+    return 0
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    args.local = True
+    return ansible_playbook(args.client, "config.yml", args)
+
+
+def cmd_playbook(playbook: str, *, bootstrap: bool = False) -> Any:
+    def handler(args: argparse.Namespace) -> int:
+        extra: list[str] = []
+        if getattr(args, "snapshot", None):
+            extra += ["-e", f"restore_snapshot={args.snapshot}"]
+        if getattr(args, "dest", None):
+            extra += ["-e", f"harness_dest={Path(args.dest).expanduser().resolve()}"]
+        if getattr(args, "confirm", False):
+            extra += ["-e", "restore_confirmed=true"]
+        return ansible_playbook(args.client, playbook, args, bootstrap=bootstrap, extra=extra)
+
+    return handler
+
+
+def cmd_secrets(args: argparse.Namespace) -> int:
+    data = decrypt_secrets(args.client)
+    if args.action == "show":
+        if not args.key:
+            raise CliError("Indiquez la clé à afficher, ex. « bin/dokopilot secrets demo show maintenance_sudo_password ».")
+        value: Any = data["secrets"]
+        for part in (args.key or "").split("."):
+            if part:
+                if not isinstance(value, dict) or part not in value:
+                    raise CliError(f"Clé « {args.key} » absente.")
+                value = value[part]
+        print(value if isinstance(value, str) else yaml.safe_dump(value, allow_unicode=True))
+        return 0
+    if args.action == "keys":
+        print("\n".join(sorted(data["secrets"].keys())))
+        return 0
+    editor = os.environ.get("EDITOR", "nano")
+    with private_tempdir() as tmp:
+        clear = tmp / "secrets.yml"
+        fd = os.open(clear, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(data, handle, allow_unicode=True, sort_keys=False)
+        subprocess.run([editor, str(clear)], check=True)
+        edited = load_yaml(clear)
+        if "secrets" not in edited:
+            raise CliError("Le fichier modifié doit garder la clé « secrets ». Rien n'a été changé.")
+        encrypt_secrets(args.client, fill_generated(edited))
+    print("Secrets rechiffrés.")
+    return 0
+
+
+def cmd_ssh(args: argparse.Namespace) -> int:
+    settings = client_settings(args.client)
+    inv = inventory(args.client, settings, user=args.user, local=False, bootstrap=False)
+    host = next(iter(inv["dokopilot"]["hosts"].values()))
+    key = private_key_for(settings, host["ansible_user"])
+    cmd = ["ssh", *ssh_options(key), "-p", str(host["ansible_port"]), f"{host['ansible_user']}@{host['ansible_host']}"]
+    if args.tunnel:
+        cmd[1:1] = ["-L", "8080:127.0.0.1:8080"]
+        print("Dokos sera joignable sur http://localhost:8080 tant que cette session est ouverte.")
+    return subprocess.run(cmd).returncode
+
+
+def parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="dokopilot", description="Installation unifiée de DokoPilot (Dokos, durcissement, sauvegardes, poste de l'entrepreneur).")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    def with_common(sp: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        sp.add_argument("client", help="identifiant du client (dossier clients/<client>)")
+        sp.add_argument("--user", help="compte SSH à utiliser (par défaut : premier compte de maintenance)")
+        sp.add_argument("--local", action="store_true", help="exécuter sur cette machine (depuis le serveur lui-même)")
+        sp.add_argument("--check", action="store_true", help="simulation Ansible, sans changement")
+        sp.add_argument("-K", "--ask-become-pass", action="store_true", help="demander le mot de passe sudo du compte utilisé (premier passage)")
+        sp.add_argument("-v", "--verbose", action="count", default=0)
+        return sp
+
+    sp = sub.add_parser("doctor", help="vérifier les outils du poste")
+    sp.set_defaults(func=cmd_doctor)
+
+    sp = sub.add_parser("init", help="créer ou compléter la configuration et les secrets d'un client")
+    sp.add_argument("client")
+    sp.add_argument("--profile", choices=["demo", "production"], default="demo")
+    sp.add_argument("--address", help="adresse SSH du serveur ou de la VM")
+    sp.add_argument("--maintenance-user", help="nom du compte de maintenance (client.local.yml)")
+    sp.add_argument("--bootstrap-user", help="compte initial de l'hébergeur ou de l'installation, utilisé par bootstrap puis neutralisé")
+    sp.add_argument("--ssh-key", help="chemin de la clé SSH publique de ce compte")
+    sp.add_argument("--recipient", action="append", help="clé publique age supplémentaire (entrepreneur, secours)")
+    sp.set_defaults(func=cmd_init)
+
+    sp = with_common(sub.add_parser("config", help="valider et afficher la configuration effective"))
+    sp.set_defaults(func=cmd_config)
+
+    sp = with_common(sub.add_parser("bootstrap", help="premier passage avec le compte de l'hébergeur : comptes de maintenance et SSH"))
+    sp.set_defaults(func=cmd_playbook("bootstrap.yml", bootstrap=True))
+
+    sp = with_common(sub.add_parser("install", help="installer ou mettre à jour tout le serveur"))
+    sp.set_defaults(func=cmd_playbook("site.yml"))
+
+    sp = with_common(sub.add_parser("check", help="contrôles de bon fonctionnement et de sécurité"))
+    sp.set_defaults(func=cmd_playbook("check.yml"))
+
+    sp = with_common(sub.add_parser("backup", help="lancer une sauvegarde maintenant"))
+    sp.set_defaults(func=cmd_playbook("backup.yml"))
+
+    sp = with_common(sub.add_parser("restore", help="restaurer une sauvegarde (écrase le site)"))
+    sp.add_argument("--snapshot", default="latest", help="instantané restic (par défaut : le plus récent)")
+    sp.add_argument("--confirm", action="store_true", help="confirmer l'écrasement des données actuelles")
+    sp.set_defaults(func=cmd_playbook("restore.yml"))
+
+    sp = with_common(sub.add_parser("demo-reset", help="recharger les données de test (profil demo)"))
+    sp.set_defaults(func=cmd_playbook("demo-reset.yml"))
+
+    sp = with_common(sub.add_parser("harness", help="générer la configuration du harnais sur ce poste"))
+    sp.add_argument("--dest", help="dossier de travail de l'entrepreneur (par défaut : ~/DokoPilot/<client>)")
+    sp.set_defaults(func=cmd_playbook("harness.yml"))
+
+    sp = sub.add_parser("secrets", help="lire ou modifier les secrets chiffrés")
+    sp.add_argument("client")
+    sp.add_argument("action", choices=["edit", "show", "keys"])
+    sp.add_argument("key", nargs="?", help="clé à afficher (show), ex. maintenance_sudo_password")
+    sp.set_defaults(func=cmd_secrets)
+
+    sp = sub.add_parser("ssh", help="ouvrir une session de maintenance")
+    sp.add_argument("client")
+    sp.add_argument("--user")
+    sp.add_argument("--tunnel", action="store_true", help="ouvrir aussi un tunnel vers Dokos (localhost:8080)")
+    sp.set_defaults(func=cmd_ssh)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        return int(args.func(args))
+    except CliError as error:
+        print(f"Erreur : {error}", file=sys.stderr)
+        return 2
+    except subprocess.CalledProcessError as error:
+        print(f"Erreur : la commande {Path(error.cmd[0]).name} a échoué (code {error.returncode}).", file=sys.stderr)
+        return error.returncode or 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

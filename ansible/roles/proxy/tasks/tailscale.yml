@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# tailscale mode: `tailscale serve` publishes Dokos on the MagicDNS name, HTTPS by default.
+# Caddy is not used and stays stopped.
+
+- name: List the services
+  ansible.builtin.service_facts:
+
+- name: Stop Caddy, which only serves the lan mode
+  ansible.builtin.systemd_service:
+    name: caddy
+    state: stopped
+    enabled: false
+  when: "'caddy.service' in ansible_facts['services']"
+
+- name: Read the Tailscale state
+  ansible.builtin.command: tailscale status --json
+  register: _proxy_ts_status
+  changed_when: false
+  check_mode: false
+
+- name: Check that the server is connected to Tailscale
+  vars:
+    _ts: "{{ _proxy_ts_status.stdout | from_json }}"
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _ts.BackendState == 'Running'
+      - _ts.Self.DNSName | default('') | length > 0
+    fail_msg: >-
+      Tailscale n'est pas connecté sur le serveur (état : {{ _ts.BackendState }}) : lancez
+      d'abord l'installation système (system.yml), qui connecte le serveur au réseau Tailscale.
+
+- name: Read the current publication
+  ansible.builtin.command: tailscale serve status --json
+  register: _proxy_serve_status
+  changed_when: false
+  check_mode: false
+
+- name: Compare the publication with the expected one
+  vars:
+    _port: "{{ '443' if dp.network.tailscale.https else '80' }}"
+    _kind: "{{ 'HTTPS' if dp.network.tailscale.https else 'HTTP' }}"
+    _cfg: "{{ _proxy_serve_status.stdout | from_json if _proxy_serve_status.stdout is match('\\s*\\{') else {} }}"
+    _web: "{{ (_cfg.Web | default({})).values() | list }}"
+  ansible.builtin.set_fact:
+    _proxy_serve_port: "{{ _port }}"
+    _proxy_serve_ok: >-
+      {{ (_cfg.TCP | default({}) | list) == [_port]
+         and (_cfg.TCP[_port][_kind] | default(false)) | bool
+         and _web | length == 1
+         and (_web[0].Handlers | default({}) | list) == ['/']
+         and _web[0].Handlers['/'].Proxy | default('') == 'http://' ~ proxy_backend }}
+
+- name: Publish Dokos with tailscale serve
+  when: not _proxy_serve_ok | bool
+  block:
+    - name: Remove the previous publication
+      ansible.builtin.command: tailscale serve reset
+      changed_when: true
+
+    - name: Publish Dokos on the Tailscale network
+      ansible.builtin.command:
+        argv:
+          - tailscale
+          - serve
+          - --bg
+          - --yes
+          - "{{ ('--https=' if dp.network.tailscale.https else '--http=') ~ _proxy_serve_port }}"
+          - "http://{{ proxy_backend }}"
+      changed_when: true
+      timeout: "{{ proxy_tailscale_serve_timeout }}"
+
+  rescue:
+    - name: Report the refused publication
+      ansible.builtin.fail:
+        msg: >-
+          tailscale serve n'a pas pu publier Dokos. Dans la console Tailscale (DNS), activez
+          MagicDNS et les certificats HTTPS, autorisez Serve pour ce serveur si la console le
+          demande, puis relancez l'installation. Détail : {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default('')) }}
+
+- name: Keep the address of Dokos for the summary
+  vars:
+    _dnsname: "{{ (_proxy_ts_status.stdout | from_json).Self.DNSName | regex_replace('\\.$', '') }}"
+  ansible.builtin.set_fact:
+    dokopilot_dokos_url: "{{ ('https://' if dp.network.tailscale.https else 'http://') ~ _dnsname }}"

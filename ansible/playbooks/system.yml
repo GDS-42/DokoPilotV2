@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Hardened host: base system, maintenance accounts, SSH and fail2ban, firewall, Tailscale,
+# Docker. Run with a maintenance account (after bootstrap.yml). The proxy role is applied
+# by site.yml once Dokos is up.
+- name: Prepare the DokoPilot host
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+    - role: base
+    - role: maintenance
+    - role: ssh
+    - role: fail2ban
+    - role: firewall
+    - role: tailscale
+      when: dp.network.mode == 'tailscale'
+    - role: docker

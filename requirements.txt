@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Workstation tools (installed in .venv by `make setup`)
+ansible-core==2.21.6
+ansible-lint==26.10.1
+yamllint==1.38.0
+passlib==1.7.4

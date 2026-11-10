@@ -1,0 +1,190 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Maintenance accounts: one per person, SSH key only, sudo through the maintenance group.
+# Accounts removed from dp.maintenance.users are locked, never deleted.
+
+- name: Find the account used for this connection
+  ansible.builtin.command: id -un
+  become: false
+  changed_when: false
+  check_mode: false
+  register: _maint_login
+
+- name: Create the maintenance group
+  ansible.builtin.group:
+    name: "{{ maintenance_group }}"
+    state: present
+
+- name: List the current members of the maintenance group
+  ansible.builtin.getent:
+    database: group
+    key: "{{ maintenance_group }}"
+    fail_key: false
+
+- name: Sort the maintenance accounts into kept and retired ones
+  vars:
+    _maint_members: "{{ (ansible_facts['getent_group'][maintenance_group] | default(['', '', '']))[2] | default('', true) }}"
+  ansible.builtin.set_fact:
+    _maint_login_user: "{{ _maint_login.stdout }}"
+    _maint_names: "{{ dp.maintenance.users | map(attribute='name') | list }}"
+    _maint_retired: "{{ _maint_members.split(',') | select | reject('in', dp.maintenance.users | map(attribute='name') | list) | list }}"
+
+- name: Refuse to retire the account used for this connection
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - _maint_login_user not in _maint_retired
+    fail_msg: >-
+      Vous êtes connecté avec le compte « {{ _maint_login_user }} », qui n'est plus dans
+      maintenance.users : ce passage le verrouillerait en cours de route. Relancez avec un
+      compte de maintenance conservé (option --user ou variable DOKOPILOT_SSH_USER).
+
+- name: Create or update the maintenance accounts
+  vars:
+    # Stable salt, so that the same password gives the same hash and the task stays idempotent.
+    _maint_salt: "{{ ('dokopilot:' ~ dp.client.id ~ ':' ~ item.name) | hash('sha256') }}"
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    comment: "{{ item.full_name | default(item.name) }}"
+    shell: /bin/bash
+    create_home: true
+    groups: "{{ [maintenance_group] + maintenance_extra_groups }}"
+    append: false
+    expires: -1
+    password: "{{ (secrets.maintenance_sudo_password | password_hash('sha512', _maint_salt[:16])) if dp.maintenance.sudo_requires_password else omit }}"
+    password_lock: "{{ omit if dp.maintenance.sudo_requires_password else true }}"
+  loop: "{{ dp.maintenance.users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+# sudo matches groups against those of the login session: reconnect so that an account in
+# use that just joined the maintenance group gets it before its other sudo rules are removed.
+# Done before the keys are replaced, so the reconnection still uses the current keys.
+- name: Reconnect so that new group memberships take effect
+  ansible.builtin.meta: reset_connection
+
+- name: Install the SSH keys of the maintenance accounts, and only those
+  ansible.posix.authorized_key:
+    user: "{{ item.name }}"
+    key: "{{ item.ssh_public_keys | join('\n') }}"
+    exclusive: true
+    state: present
+  loop: "{{ dp.maintenance.users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Grant sudo to the maintenance group
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: "{{ maintenance_sudoers_file }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+# Cloud images (cloud-init) and some hosting providers grant NOPASSWD sudo to the initial
+# account. Once our rule is in place, those rules are removed so that sudo really asks for
+# the password. The account running this play keeps its rule when removing it would break
+# the rest of the run (provider account during bootstrap, or no become password given):
+# the next run, made with a maintenance account and its password, removes it.
+- name: Remove the password-less sudo rules of the maintenance and provider accounts
+  when: dp.maintenance.sudo_requires_password
+  vars:
+    _maint_has_become_password: "{{ (ansible_become_password | default(ansible_become_pass | default(''), true)) | string | length > 0 }}"
+    _maint_keep_login_rule: "{{ _maint_login_user not in _maint_names or not _maint_has_become_password }}"
+    _maint_nopasswd_accounts: >-
+      {{ (_maint_names + [dp.server.bootstrap_user]) | unique
+         | reject('equalto', 'root')
+         | reject('equalto', _maint_login_user if _maint_keep_login_rule else '')
+         | list }}
+  block:
+    - name: List the other sudoers drop-in files
+      ansible.builtin.find:
+        paths: /etc/sudoers.d
+        file_type: file
+        excludes:
+          - "{{ maintenance_sudoers_file | basename }}"
+          - README
+      register: _maint_sudoers_dropins
+
+    - name: Remove the NOPASSWD rules of these accounts from the other sudoers files
+      ansible.builtin.lineinfile:
+        path: "{{ item.path }}"
+        regexp: '^\s*({{ _maint_nopasswd_accounts | map("regex_escape") | join("|") }})\s.*\bNOPASSWD\s*:'
+        state: absent
+        validate: /usr/sbin/visudo -cf %s
+      loop: "{{ _maint_sudoers_dropins.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      when: _maint_nopasswd_accounts | length > 0
+
+    - name: Warn that the password-less rule of this maintenance account is kept for now
+      ansible.builtin.debug:
+        msg: >-
+          Attention : aucun mot de passe sudo n'a été fourni pour « {{ _maint_login_user }} » ;
+          sa règle sudo sans mot de passe éventuelle est conservée pour ce passage. Relancez
+          avec bin/dokopilot, qui fournit le mot de passe des secrets, pour la retirer.
+      when:
+        - _maint_login_user in _maint_names
+        - not _maint_has_become_password
+
+- name: Retire the maintenance accounts that are no longer listed
+  when: _maint_retired | length > 0
+  block:
+    - name: Look up the home directories of the retired accounts
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Find the SSH keys of the retired accounts
+      ansible.builtin.stat:
+        path: "{{ ansible_facts['getent_passwd'][item][4] }}/.ssh/authorized_keys"
+      loop: "{{ _maint_retired | select('in', ansible_facts['getent_passwd']) | list }}"
+      register: _maint_retired_keys
+
+    - name: Empty the SSH keys of the retired accounts
+      ansible.builtin.copy:
+        dest: "{{ item.stat.path }}"
+        content: ""
+        owner: "{{ item.item }}"
+        mode: "0600"
+      loop: "{{ _maint_retired_keys.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # Leaving the maintenance group also removes the SSH (AllowGroups) and sudo rights.
+    - name: Lock and expire the retired accounts and remove their groups, keeping their home
+      ansible.builtin.user:
+        name: "{{ item }}"
+        password_lock: true
+        expires: 86400
+        groups: ""
+        append: false
+      loop: "{{ _maint_retired }}"
+
+# The provider's initial account (cloud image user, installer account) is not nominative:
+# once a maintenance account runs the play, it loses its password, its groups (sudo) and its
+# keys. SSH already refuses it (AllowGroups); its NOPASSWD rules are removed above.
+- name: Neutralise the provider's initial account
+  when:
+    - _maint_login_user in _maint_names
+    - dp.server.bootstrap_user not in (_maint_names + ['root'])
+  block:
+    - name: Look up the provider's initial account
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ dp.server.bootstrap_user }}"
+        fail_key: false
+
+    - name: Lock the provider's initial account and remove its groups
+      ansible.builtin.user:
+        name: "{{ dp.server.bootstrap_user }}"
+        password_lock: true
+        groups: ""
+        append: false
+      when: ansible_facts['getent_passwd'][dp.server.bootstrap_user] | default(none) is not none
+
+    - name: Remove the SSH keys of the provider's initial account
+      ansible.builtin.file:
+        path: "{{ ansible_facts['getent_passwd'][dp.server.bootstrap_user][4] }}/.ssh/authorized_keys"
+        state: absent
+      when: ansible_facts['getent_passwd'][dp.server.bootstrap_user] | default(none) is not none

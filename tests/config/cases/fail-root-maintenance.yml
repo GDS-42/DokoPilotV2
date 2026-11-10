@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Maintenance accounts are nominative, never root.
+# expect: invalide : il faut un nom
+maintenance:
+  users:
+    - name: root
+      ssh_public_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICdlz24XChizBwhFPp6gSD44SkpfKjNkaDkSJAQyvIlB x"]

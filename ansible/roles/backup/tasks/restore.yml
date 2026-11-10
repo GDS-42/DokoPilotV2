@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Restores a snapshot over the current site (restore.yml, explicit confirmation only).
+
+- name: Refuse a restore that was not confirmed
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - restore_confirmed | default(false) | bool
+    fail_msg: >-
+      La restauration écrase la base et les fichiers actuels de Dokos. Confirmez-la :
+      bin/dokopilot restore <client> --confirm [--snapshot <id>]
+      (ou -e restore_confirmed=true avec ansible-playbook).
+
+- name: List the available snapshots
+  ansible.builtin.shell: |
+    set -euo pipefail
+    set -a; . {{ backup_env_file | quote }}; set +a
+    restic snapshots --tag dokopilot --compact
+  args:
+    executable: /bin/bash
+  register: _restore_snapshots
+  changed_when: false
+
+- name: Show the available snapshots
+  ansible.builtin.debug:
+    msg: "{{ _restore_snapshots.stdout_lines }}"
+
+- name: Restore the snapshot and migrate the site
+  ansible.builtin.command:
+    argv:
+      - "{{ restore_script }}"
+      - --confirm
+      - --snapshot
+      - "{{ restore_snapshot | default('latest', true) }}"
+  register: _restore_run
+  changed_when: true
+
+- name: Show the result of the restore
+  ansible.builtin.debug:
+    msg: "{{ _restore_run.stdout_lines | select('match', '^(?!\\{)') | list }}"

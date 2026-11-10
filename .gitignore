@@ -1,15 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Client configurations hold personal data: keep them in a private repository.
 # Only the demo client is versioned here.
 clients/*
 !clients/README.md
 !clients/demo/
-clients/demo/client.local.yml
-clients/demo/secrets.yml.age
-clients/demo/recipients.txt
+clients/demo/*
+!clients/demo/client.yml
 
 # Generated files and local tools
 .venv/
 .collections/
+.ansible/
 .generated/
 *.retry
 __pycache__/

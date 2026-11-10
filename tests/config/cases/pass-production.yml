@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A complete production configuration is valid.
+profile: production
+client: { siren: "123456789" }
+network: { mode: tailscale }
+backup: { repository: "s3:https://s3.example.test/bucket/dokopilot" }

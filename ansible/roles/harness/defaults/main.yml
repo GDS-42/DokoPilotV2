@@ -1,0 +1,224 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Agent harness on the entrepreneur's computer (opencode, Claude Code). Client settings come
+# from dp.harness; the values below are the pack's own settings and pinned versions.
+#
+# Injectable for tests and automation (never on the command line: use a vars file):
+#   harness_assistant_credentials  {user, api_key, api_secret}: skips the reads on the server
+#   harness_tailscale_dns_name     MagicDNS name of the server (tailscale mode)
+#   harness_mail_password          mail password, instead of the interactive prompt
+#   harness_calendar_password      CalDAV password, instead of the interactive prompt
+
+# Where things go on the workstation. bin/dokopilot passes harness_dest (absolute) with --dest.
+harness_home: "{{ lookup('ansible.builtin.env', 'HOME') }}"
+harness_dest: "{{ harness_home }}/DokoPilot/{{ dp.client.id }}"
+harness_config_root: "{{ harness_home }}/.config/dokopilot"
+harness_config_dir: "{{ harness_config_root }}/{{ dp.client.id }}"
+harness_token_file: "{{ harness_config_dir }}/dokos-token"
+harness_taint_dir: "{{ harness_config_dir }}/taint"
+harness_staging_dir: "{{ harness_config_dir }}/rendered"
+harness_mail_dir: "{{ harness_config_dir }}/mail"
+harness_mail_config_file: "{{ harness_mail_dir }}/config.toml"
+harness_mail_password_file: "{{ harness_config_dir }}/mail-password"
+harness_calendar_password_file: "{{ harness_config_dir }}/caldav-password"
+
+# Sources of the pack in this repository (templates, plugin, hooks, skills).
+harness_source_dir: "{{ playbook_dir | dirname | dirname }}/harness"
+
+# Server side: credentials written by the Dokos provisioning (root, 0600).
+harness_server_credentials_dir: /etc/dokopilot/assistants
+harness_dokos_mcp_path: /api/method/dokos_ai.mcp.endpoint
+
+# opencode major version: 2 (native V2 configuration and guard) or 1 (V1 shapes, static
+# rules, guard that blocks instead of asking). A client can set harness.opencode_version.
+harness_opencode_version: 2
+
+# Claude Code: the hooks need `onFailure` (v2.1.295 or later) to fail closed.
+harness_claude_code_min_version: "2.1.295"
+# true: Claude Code refuses to start when the Bash sandbox cannot run (bubblewrap missing).
+harness_claude_sandbox_required: false
+
+# Pinned MCP servers that run on the workstation (stdio).
+harness_mail_mcp_command: uvx
+harness_mail_mcp_package: mcp-email-server@1.14.0
+harness_calendar_mcp_command: npx
+harness_calendar_mcp_package: "@ni-c/caldav-mcp@0.1.5"
+
+# MCP server names: they prefix the tool names (opencode dokos_doc_list, Claude Code
+# mcp__dokos__doc_list). The guards and the skills rely on them: do not rename.
+harness_dokos_server: dokos
+harness_mail_server: mail
+harness_calendar_server: calendar
+
+# Dokos AI MCP tools (dokos_ai/mcp_server/tools.py, v1.14.0).
+harness_dokos_read_tools: [site_current, list_skills, load_skill, meta_get, perms_get, doc_get, doc_list, doc_count, doc_value, run_report]
+harness_dokos_draft_tools: [doc_create, doc_update]
+harness_dokos_denied_tools: [doc_submit, doc_cancel, doc_delete]
+
+# mcp-email-server 1.14.0 tools (mcp_email_server/app.py). The account only grants the
+# "draft" mutation and has no SMTP server; the client denies every send, raw, organise or
+# delete tool on top of that.
+harness_mail_read_tools:
+  - list_available_accounts
+  - list_email_tags
+  - list_emails_metadata
+  - get_emails_content
+  - list_allowed_recipients
+  - list_allowed_senders
+  - list_mailboxes
+  - get_attachment_content
+harness_mail_draft_tools: [save_draft]
+harness_mail_denied_tools:
+  - send_email
+  - forward_email
+  - email_command
+  - save_to_mailbox
+  - delete_emails
+  - download_attachment
+  - move_emails
+  - archive_emails
+  - set_email_flags
+  - set_email_tags
+  - mark_emails_as_read
+  - create_mailbox
+
+# @ni-c/caldav-mcp 0.1.5 tools (src/tools/catalogue.ts). Deletions, moves and invitation
+# answers (which send mail) are removed on the server (CALDAV_DENY_TOOLS) and denied here.
+harness_calendar_read_tools:
+  - list_calendars
+  - get_server_info
+  - list_events
+  - get_event
+  - search_events
+  - get_free_busy
+  - list_tasks
+  - get_task
+  - list_journals
+  - get_journal
+harness_calendar_write_tools: [create_event, update_event, create_task, update_task, complete_task, create_journal, update_journal]
+harness_calendar_denied_tools: [delete_event, delete_task, delete_journal, move_event, respond_to_event]
+
+# opencode rules applied to every agent, before the MCP rules (last matching rule wins).
+harness_oc_base_rules:
+  - { action: "*", resource: "*", effect: ask }
+  - { action: read, resource: "*", effect: allow }
+  - { action: read, resource: "*.env", effect: ask }
+  - { action: read, resource: "*.env.*", effect: ask }
+  - { action: glob, resource: "*", effect: allow }
+  - { action: grep, resource: "*", effect: allow }
+  - { action: skill, resource: "*", effect: allow }
+  - { action: question, resource: "*", effect: allow }
+  - { action: opencode_list_mcp_resources, resource: "*", effect: allow }
+  - { action: opencode_read_mcp_resource, resource: "*", effect: allow }
+  - { action: external_directory, resource: "*", effect: ask }
+  - { action: webfetch, resource: "*", effect: ask }
+  - { action: websearch, resource: "*", effect: ask }
+  - { action: subagent, resource: "*", effect: deny }
+  - { action: execute, resource: "*", effect: deny }
+
+# opencode rules repeated at the end of every rule list, so that no later allow can reopen
+# them: credentials, the guard's own files, and the CLIs that print a resolved configuration.
+harness_oc_protect_rules:
+  - { action: read, resource: "~/.config/dokopilot/*", effect: deny }
+  - { action: edit, resource: "~/.config/dokopilot/*", effect: deny }
+  - { action: external_directory, resource: "~/.config/dokopilot/*", effect: deny }
+  - { action: read, resource: "~/.ssh/*", effect: deny }
+  - { action: read, resource: "~/.local/share/opencode/*", effect: deny }
+  - { action: shell, resource: "*.config/dokopilot*", effect: deny }
+  - { action: shell, resource: "*dokos-token*", effect: deny }
+  - { action: shell, resource: "*mail-password*", effect: deny }
+  - { action: shell, resource: "*caldav-password*", effect: deny }
+  - { action: shell, resource: "opencode *", effect: deny }
+  - { action: shell, resource: "claude *", effect: deny }
+  - { action: edit, resource: "opencode.json", effect: deny }
+  - { action: edit, resource: ".opencode/*", effect: deny }
+  - { action: edit, resource: ".agents/*", effect: deny }
+  - { action: edit, resource: ".claude/*", effect: deny }
+  - { action: edit, resource: ".mcp.json", effect: deny }
+  - { action: edit, resource: "CLAUDE.md", effect: deny }
+  - { action: edit, resource: "AGENTS.md", effect: ask }
+
+# Atelier (technical work): shell and edits in the workspace, no mail and no calendar.
+harness_oc_atelier_rules:
+  - { action: shell, resource: "*", effect: allow }
+  - { action: edit, resource: "*", effect: allow }
+  - { action: "mail_*", resource: "*", effect: deny }
+  - { action: "calendar_*", resource: "*", effect: deny }
+
+# Built-in opencode agents removed from the workspace: only Bureau and Atelier remain.
+harness_oc_disabled_agents: [build, plan, general, explore]
+
+# Built-in tools without effect, for the guards (the MCP read tools are added to them).
+harness_oc_safe_actions: [read, glob, grep, skill, question, opencode_list_mcp_resources, opencode_read_mcp_resource, external_directory]
+# OpenCode 1 cannot turn an allow into a question: after a mail read it blocks these tools.
+harness_oc_v1_blocked_tools: [bash, edit, write, patch, apply_patch, multiedit]
+harness_claude_safe_tools:
+  - Read
+  - Glob
+  - Grep
+  - LS
+  - NotebookRead
+  - TodoWrite
+  - TodoRead
+  - TaskCreate
+  - TaskUpdate
+  - TaskList
+  - TaskGet
+  - TaskOutput
+  - AskUserQuestion
+  - EnterPlanMode
+  - ExitPlanMode
+  - Skill
+  - ToolSearch
+  - ListMcpResourcesTool
+  - ReadMcpResourceTool
+  - SubagentHandback
+# Tools that the Bureau context always submits to the entrepreneur (Claude Code).
+harness_claude_bureau_confirm_tools: [Bash, PowerShell, Monitor, Edit, Write, NotebookEdit, MultiEdit]
+# Claude Code deny rules added to the MCP denials: credentials, the guard's own files, and
+# the CLIs that could print a resolved configuration. The Bash sandbox enforces the same
+# paths at the operating-system level (sandbox.filesystem in .claude/settings.json).
+harness_claude_protect_rules:
+  - Read(~/.config/dokopilot/**)
+  - Edit(~/.config/dokopilot/**)
+  - Read(~/.ssh/**)
+  - Read(~/.local/share/opencode/**)
+  - Bash(*.config/dokopilot*)
+  - Bash(*dokos-token*)
+  - Bash(*mail-password*)
+  - Bash(*caldav-password*)
+  - Bash(opencode *)
+  - Bash(claude *)
+  - Edit(/.claude/**)
+  - Edit(/.mcp.json)
+  - Edit(/.opencode/**)
+  - Edit(/opencode.json)
+  - Edit(/.agents/**)
+  - Edit(/CLAUDE.md)
+
+# French business skills (harness/skills/<name>/SKILL.md), copied for each harness.
+harness_skills:
+  - factures-fournisseurs
+  - relances-clients
+  - rapprochement-bancaire
+  - synthese-activite
+  - tri-courriels
+  - devis
+
+# Files of the workspace. `data` names the fact that templates/data.json.j2 serialises;
+# `template: false` copies the file as is.
+harness_workspace_files:
+  - { src: templates/AGENTS.md.j2, dest: AGENTS.md, harness: all }
+  - { src: templates/data.json.j2, dest: opencode.json, data: _harness_opencode_config, harness: opencode }
+  - { src: templates/opencode/bureau.md.j2, dest: .opencode/agents/bureau.md, harness: opencode }
+  - { src: templates/opencode/atelier.md.j2, dest: .opencode/agents/atelier.md, harness: opencode }
+  - { src: opencode/plugins/dokopilot-guard.js, dest: .opencode/plugins/dokopilot-guard.js, harness: opencode, template: false }
+  - { src: templates/data.json.j2, dest: .opencode/plugins/dokopilot-guard.policy.json, data: _harness_oc_guard_policy, harness: opencode }
+  - { src: templates/CLAUDE.md.j2, dest: CLAUDE.md, harness: claude-code }
+  - { src: templates/data.json.j2, dest: .mcp.json, data: _harness_claude_mcp, harness: claude-code }
+  - { src: templates/data.json.j2, dest: .claude/settings.json, data: _harness_claude_settings, harness: claude-code }
+  - { src: templates/claude/bureau.md.j2, dest: .claude/agents/bureau.md, harness: claude-code }
+  - { src: templates/claude/atelier.md.j2, dest: .claude/agents/atelier.md, harness: claude-code }
+  - { src: templates/data.json.j2, dest: .claude/hooks/guard-policy.json, data: _harness_claude_guard_policy, harness: claude-code }
+  - { src: claude/hooks/mail_taint_guard.py, dest: .claude/hooks/mail_taint_guard.py, harness: claude-code, template: false, mode: "0755" }
+  - { src: claude/hooks/dokos_headers.py, dest: .claude/hooks/dokos_headers.py, harness: claude-code, template: false, mode: "0755" }
+  - { src: claude/hooks/caldav_launcher.py, dest: .claude/hooks/caldav_launcher.py, harness: claude-code, template: false, mode: "0755" }

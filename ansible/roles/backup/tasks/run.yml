@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Runs a backup now (backup.yml).
+
+- name: Run the backup now
+  ansible.builtin.command: "{{ backup_script }}"
+  register: _backup_run
+  changed_when: true
+
+- name: Show the result of the backup
+  ansible.builtin.debug:
+    msg: "{{ _backup_run.stdout_lines }}"

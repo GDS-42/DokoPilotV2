@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Drops the demo site; demo-reset.yml then reinstalls it with fresh test data.
+# The provisioning script refuses a site that does not carry the demo marker.
+
+- name: Refuse a reset outside the demo profile
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - dp.profile == 'demo'
+    fail_msg: >-
+      demo-reset supprime le site Dokos et toutes ses données : il est réservé au profil demo
+      et refusé en production.
+
+- name: Drop the demo site (database and files)
+  ansible.builtin.include_role:
+    name: dokos
+    tasks_from: step
+  vars:
+    dokos_step: demo-reset
+    dokos_step_payload:
+      site: "{{ dp.dokos.site_name }}"
+      db_root_password: "{{ secrets.db_root_password }}"

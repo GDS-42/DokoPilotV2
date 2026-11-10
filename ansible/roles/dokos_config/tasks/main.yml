@@ -1,0 +1,182 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Configuration of the Dokos site, through the provisioning scripts of stack/provisioning
+# (run in the backend container by the dokos role's step.yml). Every step is idempotent.
+
+- name: Run the setup wizard for the French company
+  ansible.builtin.include_role:
+    name: dokos
+    tasks_from: step
+  vars:
+    dokos_step: setup-company
+    dokos_step_no_log: false
+    dokos_step_payload:
+      site: "{{ dp.dokos.site_name }}"
+      company_name: "{{ dp.client.company_name }}"
+      company_abbr: "{{ dp.client.company_abbr }}"
+      country: "{{ dp.client.country }}"
+      language: "{{ dp.client.language }}"
+      timezone: "{{ dp.client.timezone }}"
+      currency: "{{ dp.client.currency }}"
+      chart_of_accounts: "{{ dokos_config_chart_of_accounts }}"
+      fiscal_year_start: "{{ dp.client.fiscal_year_start }}"
+      siren: "{{ dp.client.siren }}"
+      wait_timeout: "{{ dokos_config_regional_timeout }}"
+
+- name: Keep the company summary
+  ansible.builtin.set_fact:
+    dokos_config_company: "{{ dokos_step_result }}"
+
+- name: Create the entrepreneur's user
+  ansible.builtin.include_role:
+    name: dokos
+    tasks_from: step
+  vars:
+    dokos_step: entrepreneur
+    dokos_step_payload:
+      site: "{{ dp.dokos.site_name }}"
+      email: "{{ dp.users.entrepreneur.email }}"
+      first_name: "{{ dp.users.entrepreneur.first_name }}"
+      last_name: "{{ dp.users.entrepreneur.last_name }}"
+      password: "{{ secrets.entrepreneur_password }}"
+      language: "{{ dp.client.language }}"
+      roles: "{{ dokos_config_entrepreneur_roles }}"
+
+- name: Create the role of the assistants and its permissions
+  ansible.builtin.include_role:
+    name: dokos
+    tasks_from: step
+  vars:
+    dokos_step: assistant-role
+    dokos_step_no_log: false
+    dokos_step_payload:
+      site: "{{ dp.dokos.site_name }}"
+      role: "{{ dokos_config_assistant_role }}"
+      draft_doctypes: "{{ dokos_config_assistant_draft_doctypes }}"
+      read_doctypes: "{{ dokos_config_assistant_read_doctypes }}"
+      draft_flags: "{{ dokos_config_assistant_draft_flags }}"
+      read_flags: "{{ dokos_config_assistant_read_flags }}"
+
+- name: Report the DocTypes that do not exist in this version of Dokos
+  ansible.builtin.debug:
+    msg: "Types de document absents de cette version, ignorés : {{ dokos_step_result.skipped | join(', ') }}"
+  when: dokos_step_result.skipped | length > 0
+
+- name: Read the credentials already written on the server
+  ansible.builtin.slurp:
+    src: "{{ dokos_config_assistants_dir }}/{{ item.email }}.json"
+  loop: "{{ dp.users.assistants }}"
+  loop_control:
+    label: "{{ item.email }}"
+  register: _dokos_config_existing
+  failed_when: false
+  no_log: true
+
+- name: Create the assistant users and their API keys
+  ansible.builtin.include_role:
+    name: dokos
+    tasks_from: step
+  vars:
+    _people: "{{ {dp.users.entrepreneur.email: (dp.users.entrepreneur.first_name ~ ' ' ~ dp.users.entrepreneur.last_name) | trim} }}"
+    dokos_step: assistants
+    dokos_step_payload:
+      site: "{{ dp.dokos.site_name }}"
+      roles: "{{ dokos_config_assistant_roles }}"
+      marker_role: "{{ dokos_config_assistant_role }}"
+      language: "{{ dp.client.language }}"
+      assistants: "{{ dp.users.assistants }}"
+      people: "{{ _people }}"
+      existing_credentials: >-
+        {{ _dokos_config_existing.results | selectattr('content', 'defined') | map(attribute='content')
+           | map('b64decode') | map('from_json') | list }}
+
+- name: Keep the assistants' credentials
+  ansible.builtin.set_fact:
+    _dokos_config_credentials: "{{ dokos_step_result.credentials }}"
+    _dokos_config_disabled: "{{ dokos_step_result.disabled }}"
+  no_log: true
+
+- name: Create the directory of the assistants' credentials
+  ansible.builtin.file:
+    path: "{{ dokos_config_assistants_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Write the credentials of each assistant (root only)
+  ansible.builtin.copy:
+    dest: "{{ dokos_config_assistants_dir }}/{{ item.user }}.json"
+    content: "{{ {'user': item.user, 'api_key': item.api_key, 'api_secret': item.api_secret} | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ _dokos_config_credentials }}"
+  loop_control:
+    label: "{{ item.user }}"
+  no_log: true
+
+- name: List the credential files on the server
+  ansible.builtin.find:
+    paths: "{{ dokos_config_assistants_dir }}"
+    patterns: "*.json"
+  register: _dokos_config_credential_files
+
+- name: Remove the credentials of assistants that are no longer configured
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  vars:
+    _expected: >-
+      {{ [dokos_config_assistants_dir ~ '/'] | product(_dokos_config_credentials | map(attribute='user') | map('regex_replace', '$', '.json'))
+         | map('join') | list }}
+  loop: "{{ _dokos_config_credential_files.files | map(attribute='path') | reject('in', _expected) | list }}"
+
+- name: Configure Dokos AI (MCP server, providers, pipeline templates)
+  ansible.builtin.include_role:
+    name: dokos
+    tasks_from: step
+  vars:
+    dokos_step: dokos-ai
+    dokos_step_payload:
+      site: "{{ dp.dokos.site_name }}"
+      mcp_allow_writes: "{{ dp.dokos_ai.mcp_allow_writes | bool }}"
+      providers: "{{ dp.dokos_ai.providers }}"
+      provider_keys: "{{ secrets.ai_providers | default({}, true) }}"
+      pipeline_templates: "{{ dokos_config_pipeline_templates }}"
+
+- name: Keep the Dokos AI summary
+  ansible.builtin.set_fact:
+    dokos_config_ai: "{{ dokos_step_result | dict2items | rejectattr('key', 'eq', 'changes') | items2dict }}"
+
+- name: Configure eTransactions for receiving e-invoices
+  ansible.builtin.include_role:
+    name: dokos
+    tasks_from: step
+  vars:
+    dokos_step: etransactions
+    dokos_step_payload:
+      site: "{{ dp.dokos.site_name }}"
+      company: "{{ dp.client.company_name }}"
+      enabled: "{{ dp.etransactions.enabled | bool }}"
+      environment: "{{ dp.etransactions.environment }}"
+      credentials: "{{ secrets.etransactions | default({}, true) }}"
+
+- name: Summary of the site configuration
+  vars:
+    _company: "{{ dokos_config_company }}"
+    _ai: "{{ dokos_config_ai.settings }}"
+  ansible.builtin.debug:
+    msg:
+      - >-
+        Société : {{ _company.company }} ({{ _company.chart_of_accounts }}, {{ _company.accounts }} comptes,
+        exercices {{ _company.fiscal_years | join(', ') }})
+      - >-
+        Assistants : {{ _dokos_config_credentials | map(attribute='user') | join(', ') or 'aucun' }}
+        {{ ('; désactivés : ' ~ (_dokos_config_disabled | join(', '))) if _dokos_config_disabled | length > 0 else '' }}
+      - >-
+        Dokos AI : serveur MCP {{ 'actif' if _ai.enable_mcp_server else 'inactif' }},
+        écritures {{ 'permises' if _ai.mcp_allow_writes else 'interdites' }},
+        assistant IA interne {{ 'actif' if _ai.enable_ai else 'inactif (aucun fournisseur de modèle)' }}
+      - >-
+        eTransactions : plateforme {{ dokos_step_result.platform }}, validation automatique des factures
+        d'achat {{ 'ACTIVE' if dokos_step_result.settings.auto_submit_purchase_invoices else 'désactivée' }}

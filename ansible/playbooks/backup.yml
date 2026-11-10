@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Runs a backup of Dokos now: bin/dokopilot backup <client>.
+- name: Back up Dokos now
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+  tasks:
+    - name: Run the backup
+      ansible.builtin.include_role:
+        name: backup
+        tasks_from: run

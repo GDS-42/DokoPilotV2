@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# OpenSSH server hardening. Debian reads /etc/ssh/sshd_config.d/*.conf before the rest of
+# sshd_config, and the first value of a keyword wins, so this drop-in has the last word.
+
+ssh_dropin_file: /etc/ssh/sshd_config.d/10-dokopilot.conf
+# Same group as the maintenance role (maintenance_group).
+ssh_allow_group: dokopilot-maint
+ssh_max_auth_tries: 3
+ssh_login_grace_time: 30
+ssh_client_alive_interval: 300
+ssh_client_alive_count_max: 2

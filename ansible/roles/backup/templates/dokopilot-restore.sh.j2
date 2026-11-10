@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Managed by DokoPilot (Ansible): local changes are overwritten.
+#
+# Restauration de Dokos depuis le dépôt restic : la base et les fichiers du site sont
+# REMPLACÉS par ceux de l'instantané, puis le site est migré. Avant d'écraser quoi que ce
+# soit, l'état actuel est sauvegardé (étiquette « dokopilot-pre-restore ») ; pendant la
+# restauration, Dokos est fermé aux utilisateurs.
+#   dokopilot-restore --confirm [--snapshot <id>|latest]
+# ou depuis le poste de l'intégrateur : bin/dokopilot restore <client> --confirm
+set -euo pipefail
+umask 077
+
+stack_dir={{ dokopilot_stack_dir | quote }}
+site={{ dp.dokos.site_name | quote }}
+host_dir={{ dokopilot_bench_backup_dir | quote }}
+env_file={{ backup_env_file | quote }}
+backup_script={{ backup_script | quote }}
+{% raw %}
+
+snapshot=latest
+confirmed=false
+while (( $# > 0 )); do
+  case "$1" in
+    --confirm) confirmed=true ;;
+    --snapshot) snapshot="${2:?--snapshot demande un identifiant}"; shift ;;
+    *) echo "Option inconnue : $1 (attendu : --confirm [--snapshot <id>])" >&2; exit 2 ;;
+  esac
+  shift
+done
+if [[ "$confirmed" != true ]]; then
+  echo "La restauration écrase la base et les fichiers actuels du site $site." >&2
+  echo "Relancez avec --confirm pour la confirmer." >&2
+  exit 2
+fi
+
+set -a
+# shellcheck disable=SC1090
+. "$env_file"
+set +a
+
+# Resolve "latest" to a fixed snapshot first: the safety backup below must not become it.
+if [[ "$snapshot" == latest ]]; then
+  selection=(--latest 1)
+else
+  selection=("$snapshot")
+fi
+read -r snapshot snapshot_time < <(restic snapshots --tag dokopilot --json "${selection[@]}" | python3 -c '
+import json, sys
+snapshots = json.load(sys.stdin)
+if not snapshots:
+    sys.exit("aucun instantané")
+print(snapshots[-1]["short_id"], snapshots[-1]["time"][:19].replace("T", " "))
+') || { echo "Instantané introuvable : ${selection[*]}" >&2; exit 1; }
+echo "Instantané à restaurer : $snapshot, du $snapshot_time (UTC)."
+
+echo "Sauvegarde de l'état actuel avant la restauration…"
+if ! "$backup_script" --pre-restore; then
+  echo "La sauvegarde de l'état actuel a échoué : restauration abandonnée, rien n'a été modifié." >&2
+  exit 1
+fi
+
+exec 9>/run/lock/dokopilot-backup.lock
+if ! flock -n 9; then
+  echo "Une sauvegarde ou une restauration est déjà en cours." >&2
+  exit 1
+fi
+
+compose() {
+  docker compose --project-directory "$stack_dir" -f "$stack_dir/compose.yaml" "$@"
+}
+
+work="$host_dir/restore"
+rm -rf "$work"
+install -d -o 1000 -g 0 -m 0750 "$work"
+cleanup() {
+  rm -rf "$work"
+  compose start queue-short queue-long scheduler frontend websocket >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+echo "Lecture de l'instantané $snapshot…"
+restic restore "$snapshot" --tag dokopilot --target "$work" --include "$host_dir/current"
+set_dir="$work$host_dir/current"
+shopt -s nullglob
+pick() { # pick <suffix> [suffix to leave out]: the one file of the set ending with <suffix>
+  local suffix="$1" exclude="${2:-}" file
+  local found=()
+  for file in "$set_dir"/*"$suffix"; do
+    if [[ -n "$exclude" && "$file" == *"$exclude" ]]; then
+      continue
+    fi
+    found+=("$file")
+  done
+  if (( ${#found[@]} > 1 )); then
+    echo "Plusieurs fichiers *$suffix dans l'instantané." >&2
+    return 1
+  fi
+  if (( ${#found[@]} == 1 )); then
+    echo "/home/frappe/backups/restore$host_dir/current/$(basename "${found[0]}")"
+  fi
+}
+sql_file="$(pick -database.sql.gz)"
+public_file="$(pick -files.tar -private-files.tar)"
+private_file="$(pick -private-files.tar)"
+config_file="$(pick -site_config_backup.json)"
+if [[ -z "$sql_file" ]]; then
+  echo "L'instantané $snapshot ne contient pas de sauvegarde de la base." >&2
+  exit 1
+fi
+chown -R 1000:0 "$work"
+
+echo "Fermeture de Dokos aux utilisateurs et arrêt des tâches de fond pendant la restauration…"
+compose stop frontend websocket queue-short queue-long scheduler
+
+echo "Restauration de la base et des fichiers…"
+# The database root password goes from the stack's .env to the provisioning script on
+# stdin, never on a command line.
+python3 - "$stack_dir/.env" "$site" "$sql_file" "$public_file" "$private_file" "$config_file" <<'PY' \
+  | compose exec -T backend /home/frappe/frappe-bench/env/bin/python /opt/dokopilot/provisioning/run.py restore
+import json
+import sys
+
+env_path, site, sql_file, public_file, private_file, config_file = sys.argv[1:7]
+values = {}
+with open(env_path, encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            values[key] = value[1:-1] if value[:1] == value[-1:] == "'" else value
+json.dump(
+    {
+        "site": site,
+        "db_root_password": values["DB_ROOT_PASSWORD"],
+        "sql_file": sql_file,
+        "public_file": public_file,
+        "private_file": private_file,
+        "site_config_file": config_file,
+    },
+    sys.stdout,
+)
+PY
+
+echo "Migration du site…"
+compose exec -T backend bench --site "$site" migrate
+echo "Restauration terminée (instantané $snapshot)."
+{% endraw %}

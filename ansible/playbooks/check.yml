@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Non-destructive checks, usable in production: bin/dokopilot check <client>.
+# Run one part with --tags host or --tags dokos.
+- name: DokoPilot checks
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    # ==================== HOST CHECKS (system roles) ====================
+    # Reserved for the checks of the system roles (SSH, firewall, Tailscale, Docker,
+    # updates); keep them in this block, with the tag `host`.
+    - name: Host checks
+      tags: [host]
+      block:
+        - name: Check the host hardening
+          ansible.builtin.include_tasks: tasks/host-checks.yml
+    # ================== END OF HOST CHECKS ==================
+
+    - name: Dokos checks (stack, site, MCP, assistants' permissions)
+      ansible.builtin.import_role:
+        name: dokos_config
+        tasks_from: check
+      tags: [dokos]

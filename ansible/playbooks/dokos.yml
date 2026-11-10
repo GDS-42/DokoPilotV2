@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Dokos stack, site configuration, demo data (demo profile) and backups.
+# Imported by site.yml after system.yml; can also run alone once the system is installed.
+- name: Dokos stack, site, configuration, demo data, backups
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+    - role: dokos
+    - role: dokos_config
+    - role: demo_data
+      when:
+        - dp.profile == 'demo'
+        - dp.demo.load_test_data | bool
+    - role: backup

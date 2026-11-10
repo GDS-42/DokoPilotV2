@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Configuration of the Dokos site for a French company: setup wizard, users, the
+# "Assistant IA" role, Dokos AI and eTransactions settings. Reads `dp` and `secrets`.
+
+# --- Shared with the dokos, demo_data and backup roles (same defaults everywhere)
+dokopilot_stack_dir: /opt/dokopilot/stack
+dokopilot_compose_project: dokopilot
+dokopilot_etc_dir: /etc/dokopilot
+dokopilot_dokos_http_port: 8080
+
+# Credentials of each assistant, read by the workstation harness (bin/dokopilot harness):
+# <dir>/<assistant email>.json = {"user", "api_key", "api_secret"}, root only.
+dokos_config_assistants_dir: "{{ dokopilot_etc_dir }}/assistants"
+
+# Chart of accounts of the setup wizard (dokos erpnext/regional/france/chart_of_accounts).
+dokos_config_chart_of_accounts: Plan Comptable Général
+# Seconds to wait for the French regional setup, which runs in the background workers.
+dokos_config_regional_timeout: 300
+
+# Roles of the entrepreneur, who validates documents. Roles missing from the image are
+# skipped. AI Manager approves Dokos AI pipeline runs.
+dokos_config_entrepreneur_roles:
+  - System Manager
+  - AI Manager
+  - Accounts Manager
+  - Accounts User
+  - Purchase Manager
+  - Purchase User
+  - Purchase Master Manager
+  - Sales Manager
+  - Sales User
+  - Sales Master Manager
+  - Stock Manager
+  - Stock User
+  - Item Manager
+
+# --- Assistants (CLAUDE.md rule 3, docs/decisions.md D-14)
+# Exactly these roles: permissions add up across roles in Frappe, so no business role.
+dokos_config_assistant_role: Assistant IA
+dokos_config_assistant_roles:
+  - Assistant IA
+  - AI Writer
+
+# Documents the assistant prepares: read, create and modify drafts. Never submit, cancel,
+# amend or delete (the provisioning script refuses those flags whatever is set here).
+# "email" is left out on purpose: sending an email from Dokos is an external effect.
+dokos_config_assistant_draft_flags:
+  read: 1
+  write: 1
+  create: 1
+  report: 1
+  print: 1
+  export: 1
+  select: 1
+dokos_config_assistant_draft_doctypes:
+  # Purchases and received e-invoices (eTransactions)
+  - Purchase Order
+  - Purchase Receipt
+  - Purchase Invoice
+  - Supplier Invoice
+  - Supplier Invoices Basket
+  - eTransactions Supplier Item Alias
+  - eTransactions Supplier Name Alias
+  # Sales and payment reminders
+  - Quotation
+  - Sales Order
+  - Delivery Note
+  - Sales Invoice
+  - Dunning
+  # Payments and accounting entries (drafts only)
+  - Payment Entry
+  - Journal Entry
+  # Third parties and items
+  - Customer
+  - Supplier
+  - Contact
+  - Address
+  - Item
+
+# Reference data the assistant reads. DocTypes already readable by every user (All,
+# Desk User) are left untouched.
+dokos_config_assistant_read_flags:
+  read: 1
+  report: 1
+  select: 1
+dokos_config_assistant_read_doctypes:
+  - eInvoice
+  - eInvoice Event
+  - eTransaction Profile
+  - eTransactions Company Name Alias
+  - Company
+  - Account
+  - Cost Center
+  - Fiscal Year
+  - Journal Entry Template
+  - GL Entry
+  - Payment Ledger Entry
+  - Sales Taxes and Charges Template
+  - Purchase Taxes and Charges Template
+  - Item Tax Template
+  - Tax Category
+  - Warehouse
+  - Price List
+  - Item Price
+  - Item Group
+  - Brand
+  - UOM
+  - Customer Group
+  - Supplier Group
+  - Territory
+  - Bank
+  - Bank Account
+  - Bank Transaction
+  - Mode of Payment
+  - Payment Terms Template
+  - Payment Term
+  - Terms and Conditions
+  - Dunning Type
+
+# --- Checks (check.yml): what an assistant must never be able to do
+dokos_config_forbidden_roles:
+  - Administrator
+  - System Manager
+  - AI Manager
+dokos_config_forbidden_ptypes: [submit, cancel, amend, delete]
+dokos_config_critical_doctypes:
+  - Purchase Invoice
+  - Sales Invoice
+  - Payment Entry
+  - Journal Entry
+  - Purchase Order
+  - Purchase Receipt
+  - Supplier Invoice
+  - Quotation
+  - Sales Order
+  - Delivery Note
+  - Dunning
+  - Stock Entry
+  - Bank Transaction
+  - GL Entry
+# Point of sale (out of scope, D-10): never readable by an assistant.
+dokos_config_pos_doctypes:
+  - POS Invoice
+  - POS Profile
+  - POS Opening Entry
+  - POS Closing Entry
+  - POS Invoice Merge Log
+  - POS Settings
+
+# --- Dokos AI: the two pipeline templates, created disabled with a Manual trigger.
+dokos_config_pipeline_templates:
+  - etransactions-supplier-invoice-review
+  - bank-transaction-reconciliation-suggestion

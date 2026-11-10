@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Restores a backup over the current site: bin/dokopilot restore <client> --confirm
+# [--snapshot <id>]. Refused without -e restore_confirmed=true.
+- name: Restore Dokos from a backup
+  hosts: dokopilot
+  become: true
+  roles:
+    - role: config
+  tasks:
+    - name: Restore the snapshot
+      ansible.builtin.include_role:
+        name: backup
+        tasks_from: restore
