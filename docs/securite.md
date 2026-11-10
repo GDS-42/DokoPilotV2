@@ -109,6 +109,8 @@ qui conviennent.
   livraisons, devis, relances, mouvements de stock et opérations bancaires, la propriété
   « Protéger les fichiers joints » de Dokos : la pièce d'un document validé ne se supprime
   plus, ni par un assistant ni par une personne (celle d'un brouillon se corrige encore) ;
+- les rapports comptables dont les compétences se servent (grand livre, balance, registres des
+  ventes et des achats, comptes clients et fournisseurs) lui sont ouverts en lecture ;
 - les règles de Dokos AI (réglages par type de document, journal d'audit) s'ajoutent à ces
   permissions ;
 - les tests `tests/stack/` vérifient, sur une vraie instance, qu'un assistant ne peut ni valider
