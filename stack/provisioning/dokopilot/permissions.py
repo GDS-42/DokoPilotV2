@@ -10,6 +10,14 @@ Custom DocPerm row would replace every standard rule of that DocType
 
 Whatever the payload asks, submit, cancel, amend and delete are never granted, and are
 reset to 0 if someone ticked them in the desk.
+
+Attached files: Dodock gives every user the right to delete a File attached to a document
+they can write (role « All » on File, frappe/core/doctype/file/file.py, has_permission), even
+once the document is submitted. An assistant, which writes drafts of invoices and payments,
+could therefore delete the supplier's PDF of a validated invoice. The documented DocType
+property « Protect Attached Files » (Customize Form) closes it: attachments of a submitted
+document can no longer be deleted (File.validate_protected_file). It is set here, as Customize
+Form does, on the document types listed in `protected_attachment_doctypes`.
 """
 
 from __future__ import annotations
@@ -143,6 +151,30 @@ def ensure_assistant_role(payload: dict[str, Any]) -> dict[str, Any]:
                     )
                     changes.append(f"{row.parent} (level {row.permlevel}): {flag}=0")
 
+        protected: list[str] = []
+        for doctype in payload.get("protected_attachment_doctypes") or []:
+            if not frappe.db.exists("DocType", doctype):
+                continue
+            if not frappe.get_meta(doctype).protect_attached_files:
+                # The call Customize Form makes for a DocType property. The fields are not
+                # validated again: the property does not touch them, and an upstream DocType
+                # whose own fields fail that validation (Bank Transaction, a duplicate column
+                # break in v5.18) would refuse any property.
+                frappe.make_property_setter(
+                    {
+                        "doctype": doctype,
+                        "doctype_or_field": "DocType",
+                        "property": "protect_attached_files",
+                        "value": 1,
+                        "property_type": "Check",
+                    },
+                    validate_fields_for_doctype=False,
+                    is_system_generated=False,
+                )
+                frappe.clear_cache(doctype=doctype)
+                changes.append(f"{doctype}: attached files protected once submitted")
+            protected.append(doctype)
+
         if changes:
             frappe.clear_cache()
         doctypes = sorted(frappe.get_all("Custom DocPerm", filters={"role": role}, pluck="parent", distinct=True))
@@ -153,4 +185,5 @@ def ensure_assistant_role(payload: dict[str, Any]) -> dict[str, Any]:
         "skipped": skipped,
         "readable_by_everyone": already_readable,
         "doctypes": doctypes,
+        "protected_attachments": protected,
     }

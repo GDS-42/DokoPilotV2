@@ -103,10 +103,16 @@ qui conviennent.
   brouillon) ;
 - **jamais** valider, annuler, amender ni supprimer ; jamais System Manager, Administrator ni AI
   Manager ; aucun accès au point de vente ni à la caisse ;
+- **les pièces jointes des documents validés sont protégées** : Dokos laisse quiconque peut
+  modifier un document supprimer ses fichiers joints, même une fois le document validé.
+  L'installation active donc, sur les factures, paiements, écritures, commandes, réceptions,
+  livraisons, devis, relances, mouvements de stock et opérations bancaires, la propriété
+  « Protéger les fichiers joints » de Dokos : la pièce d'un document validé ne se supprime
+  plus, ni par un assistant ni par une personne (celle d'un brouillon se corrige encore) ;
 - les règles de Dokos AI (réglages par type de document, journal d'audit) s'ajoutent à ces
   permissions ;
 - les tests `tests/stack/` vérifient, sur une vraie instance, qu'un assistant ne peut ni valider
-  ni supprimer une facture.
+  ni supprimer une facture, ni supprimer la pièce jointe d'une facture validée.
 
 La validation d'un document reste donc un geste humain dans Dokos, quel que soit le harnais ou le
 modèle utilisé.

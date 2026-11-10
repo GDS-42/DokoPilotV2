@@ -256,6 +256,27 @@ done
 allowed="$(curl -fsS -H "@$work/token.header" "$base/api/method/frappe.client.has_permission?doctype=Purchase%20Invoice&docname=$pi_name&perm_type=submit" | jq -r '.message.has_permission')"
 check "frappe.client.has_permission(submit) faux pour l'assistant" equals "$allowed" false
 
+# The supporting document of a validated invoice. Dokos lets whoever can write a document
+# delete its attachments, even once it is submitted, unless the DocType protects them: the
+# assistant, which writes drafts of invoices, could delete the PDF of a validated one.
+attach() { # attach <doctype> <name> : a private file attached by the administrator; prints the File name
+  docker compose --project-directory "$prefix/stack" exec -T backend bench --site erp.demo.local execute frappe.utils.file_manager.save_file \
+    --kwargs "{'fname': 'piece-justificative.txt', 'content': 'pièce justificative de $2', 'dt': '$1', 'dn': '$2', 'is_private': 1}" \
+    2>/dev/null | tail -n 1 | jq -r '.name // empty'
+}
+validated="$(api "/api/resource/Sales%20Invoice?limit_page_length=1&filters=$(jq -rn '[["docstatus","=",1]]|tojson|@uri')" | jq -r '.data[0].name // empty')"
+attached="$(attach "Sales Invoice" "$validated")"
+check "une pièce est jointe à la facture validée $validated ($attached)" test -n "$attached"
+result="$(tool_call doc_delete "{\"doctype\":\"File\",\"name\":\"$attached\"}")"
+check "l'assistant ne supprime pas la pièce jointe d'une facture validée (MCP)" equals "$(jq -r '.result.isError' <<<"$result")" true
+check "ni par l'API (DELETE /api/resource/File)" equals \
+  "$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H "@$work/token.header" "$base/api/resource/File/$attached" | cut -c1)" 4
+check "la pièce jointe existe toujours" equals "$(api "/api/resource/File/$attached" | jq -r '.data.name')" "$attached"
+# On a draft, a wrong attachment can still be corrected.
+draft_file="$(attach "Purchase Invoice" "$pi_name")"
+result="$(tool_call doc_delete "{\"doctype\":\"File\",\"name\":\"$draft_file\"}")"
+check "la pièce jointe d'un brouillon se retire encore" equals "$(jq -r '.result.isError' <<<"$result")/${draft_file:+attached}" "false/attached"
+
 # --------------------------------------------------------------------------- 3. bench, checks, idempotence
 
 # bench commands with the dependencies of the derived image (click downgraded by

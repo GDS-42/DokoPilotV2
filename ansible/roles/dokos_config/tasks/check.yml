@@ -45,6 +45,7 @@
       assistant_roles: "{{ dokos_config_assistant_roles }}"
       forbidden_roles: "{{ dokos_config_forbidden_roles }}"
       critical_doctypes: "{{ dokos_config_critical_doctypes }}"
+      protected_attachment_doctypes: "{{ dokos_config_protected_attachment_doctypes }}"
       forbidden_ptypes: "{{ dokos_config_forbidden_ptypes }}"
       pos_doctypes: "{{ dokos_config_pos_doctypes }}"
       min_workers: 2

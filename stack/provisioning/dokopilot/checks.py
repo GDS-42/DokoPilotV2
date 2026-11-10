@@ -92,6 +92,18 @@ def run_checks(payload: dict[str, Any]) -> dict[str, Any]:
             if pos_readable:
                 problems.append(f"{email} peut lire des documents de caisse : {', '.join(pos_readable)}")
 
+        # Supporting documents: the attachments of a submitted document cannot be deleted.
+        unprotected = [
+            doctype
+            for doctype in payload.get("protected_attachment_doctypes") or []
+            if frappe.db.exists("DocType", doctype) and not frappe.get_meta(doctype).protect_attached_files
+        ]
+        if unprotected:
+            problems.append(
+                "les pièces jointes des documents validés peuvent être supprimées (propriété « Protéger les fichiers "
+                f"joints » absente) : {', '.join(unprotected)}"
+            )
+
     return {
         "changed": False,
         "ok": not problems,
