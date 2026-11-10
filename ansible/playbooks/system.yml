@@ -5,6 +5,11 @@
 - name: Prepare the DokoPilot host
   hosts: dokopilot
   become: true
+  # A later role may stop the play (Tailscale waiting for an approval, a package mirror down):
+  # the reloads of sshd, nftables and fail2ban already notified still run. Without this, the
+  # files said « hardened » while the running services kept their previous settings, and the
+  # next run, finding the files unchanged, never reloaded them.
+  force_handlers: true
   roles:
     - role: config
     - role: base

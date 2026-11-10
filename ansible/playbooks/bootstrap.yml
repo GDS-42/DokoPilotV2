@@ -6,6 +6,8 @@
   hosts: dokopilot
   become: true
   gather_facts: false
+  # The reloads already notified run even when a later task fails (see system.yml).
+  force_handlers: true
   pre_tasks:
     # Some minimal images log in as root without sudo or Python: install them first.
     - name: Install Python and sudo when they are missing

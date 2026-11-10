@@ -109,6 +109,47 @@
       changed_when: false
       check_mode: false
 
+    # The first value of a keyword wins: a hosting provider's file read before ours, or a
+    # Match block, would silently override the hardening. The settings are read as sshd
+    # applies them to each maintenance account (-C evaluates the Match blocks); on a
+    # mismatch the rescue below puts the previous file back and the run stops.
+    - name: Read the SSH settings as they apply to each maintenance account
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/sshd
+          - -T
+          - -C
+          - "user={{ item.name }},host=localhost,addr=127.0.0.1"
+      loop: "{{ dp.maintenance.users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _ssh_effective
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Check that the hardened settings are the ones that apply
+      vars:
+        _ssh_settings: "{{ dict(item.stdout_lines | map('split', ' ', 1) | selectattr('1', 'defined') | map('list') | list) }}"
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - _ssh_settings.permitrootlogin | default('') == 'no'
+          - _ssh_settings.passwordauthentication | default('') == 'no'
+          - _ssh_settings.kbdinteractiveauthentication | default('') == 'no'
+          - _ssh_settings.allowgroups | default('') == ssh_allow_group
+        fail_msg: >-
+          Les réglages SSH de DokoPilot ne sont pas ceux qui s'appliquent au compte
+          « {{ item.item.name }} » (permitrootlogin {{ _ssh_settings.permitrootlogin | default('?') }},
+          passwordauthentication {{ _ssh_settings.passwordauthentication | default('?') }},
+          kbdinteractiveauthentication {{ _ssh_settings.kbdinteractiveauthentication | default('?') }},
+          allowgroups {{ _ssh_settings.allowgroups | default('?') }}) : un autre fichier de
+          /etc/ssh/sshd_config.d/ lu avant {{ ssh_dropin_file | basename }}, ou un bloc Match de
+          sshd_config, prend le pas sur le durcissement.
+      loop: "{{ _ssh_effective.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: not ansible_check_mode
+
     - name: Remove the backup of the previous SSH settings
       ansible.builtin.file:
         path: "{{ _ssh_dropin.backup_file }}"
@@ -137,9 +178,11 @@
     - name: Report the invalid SSH configuration
       ansible.builtin.fail:
         msg: >-
-          La configuration du serveur SSH est invalide (sshd -t a échoué) : les réglages
-          précédents ont été conservés et le service n'a pas été rechargé. Vérifiez les
-          fichiers de /etc/ssh/sshd_config.d/ sur le serveur.
+          La configuration du serveur SSH est invalide (sshd -t a échoué) ou un autre réglage
+          du serveur prend le pas sur le durcissement (voir le message ci-dessus) : les réglages
+          précédents ont été conservés et le service n'a pas été rechargé. Vérifiez
+          /etc/ssh/sshd_config et les fichiers de /etc/ssh/sshd_config.d/ sur le serveur
+          (retirez ou corrigez celui qui autorise root ou les mots de passe), puis relancez.
 
 - name: Keep the SSH server enabled and running
   ansible.builtin.systemd_service:
