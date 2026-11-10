@@ -27,6 +27,48 @@ certifiée n'est pas concernée.
 Tout se règle dans **un seul fichier par client** (`clients/<client>/client.yml`) et **un fichier
 de secrets chiffré** (`secrets.yml.age`) ; un script installe tout, en posant les questions.
 
+## En un coup d'œil
+
+```mermaid
+flowchart LR
+  personne(["Personne de l'entreprise"])
+
+  subgraph poste["Poste de chaque personne"]
+    direction TB
+    harnais["Harnais au choix<br/>opencode (par défaut) ou Claude Code"]
+    contrat["Contrat commun<br/>MCP · compétences métier<br/>AGENTS.md · permissions"]
+    copie["Copie du contexte<br/>~/DokoPilot/#60;client#62;"]
+    harnais --- contrat
+    harnais -- "lit, écrit, enregistre" --> copie
+  end
+
+  modele["Modèle au choix<br/>Mistral, Claude, OpenAI, local…"]
+  outils["Messagerie et agenda<br/>(dirigeant)"]
+
+  subgraph serveur["Serveur de l'entreprise, par Tailscale seulement"]
+    direction TB
+    dokos["Dokos v5 : système de référence<br/>Dokos AI (MCP) · eTransactions"]
+    forgejo["Forgejo : le contexte<br/>entreprise · direction · perso"]
+    sauvegardes["Sauvegardes chiffrées (restic)"]
+    sauvegardes -.-> dokos
+    sauvegardes -.-> forgejo
+  end
+
+  pdp["Super PDP<br/>plateforme agréée"]
+
+  personne --> harnais
+  personne == "valide dans Dokos" ==> dokos
+  harnais --> modele
+  contrat --> outils
+  contrat -- "Dokos par MCP :<br/>lecture et brouillons" --> dokos
+  copie -- "sync vers Forgejo :<br/>la personne relit et envoie" --> forgejo
+  dokos -- "factures électroniques" --> pdp
+```
+
+Les agents préparent : brouillons dans Dokos, enregistrements dans la copie du contexte. Une
+personne valide dans Dokos et envoie le contexte avec `bin/dokopilot sync`. Le schéma détaillé
+(conteneurs, ports, accès de maintenance) est dans [`docs/architecture.md`](docs/architecture.md).
+
 ## Démarrage rapide
 
 Sur une Debian 13 fraîchement installée, qui devient le serveur (une VM de test suffit), ou sur le
