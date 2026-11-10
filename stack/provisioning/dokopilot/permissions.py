@@ -18,6 +18,13 @@ could therefore delete the supplier's PDF of a validated invoice. The documented
 property « Protect Attached Files » (Customize Form) closes it: attachments of a submitted
 document can no longer be deleted (File.validate_protected_file). It is set here, as Customize
 Form does, on the document types listed in `protected_attachment_doctypes`.
+
+Reports: a report has its own list of roles (Report.is_permitted), which the `report` right
+on a DocType does not replace: without it, the MCP tool run_report refuses the general
+ledger or the trial balance that the business skills use. The role is added to the reports
+of `reports` as the desk screen « Role Permission for Page and Report » does: a Custom Role
+that holds the report's standard roles plus this one (a Custom Role replaces the standard
+list, so the standard roles are kept in it). Reading a report validates nothing.
 """
 
 from __future__ import annotations
@@ -175,6 +182,30 @@ def ensure_assistant_role(payload: dict[str, Any]) -> dict[str, Any]:
                 changes.append(f"{doctype}: attached files protected once submitted")
             protected.append(doctype)
 
+        reports: list[str] = []
+        for report in payload.get("reports") or []:
+            if not frappe.db.exists("Report", report):
+                continue
+            custom = frappe.db.get_value("Custom Role", {"report": report}, "name")
+            if custom:
+                document = frappe.get_doc("Custom Role", custom)
+                if role not in [row.role for row in document.roles]:
+                    document.append("roles", {"role": role})
+                    document.save(ignore_permissions=True)
+                    changes.append(f"report {report}: role {role} added")
+            else:
+                standard = frappe.get_doc("Report", report)
+                frappe.get_doc(
+                    {
+                        "doctype": "Custom Role",
+                        "report": report,
+                        "ref_doctype": standard.ref_doctype,
+                        "roles": [{"role": name} for name in [*[row.role for row in standard.roles], role]],
+                    }
+                ).insert(ignore_permissions=True)
+                changes.append(f"report {report}: role {role} added to its standard roles")
+            reports.append(report)
+
         if changes:
             frappe.clear_cache()
         doctypes = sorted(frappe.get_all("Custom DocPerm", filters={"role": role}, pluck="parent", distinct=True))
@@ -186,4 +217,5 @@ def ensure_assistant_role(payload: dict[str, Any]) -> dict[str, Any]:
         "readable_by_everyone": already_readable,
         "doctypes": doctypes,
         "protected_attachments": protected,
+        "reports": reports,
     }

@@ -272,6 +272,13 @@ check "l'assistant ne supprime pas la pièce jointe d'une facture validée (MCP)
 check "ni par l'API (DELETE /api/resource/File)" equals \
   "$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H "@$work/token.header" "$base/api/resource/File/$attached" | cut -c1)" 4
 check "la pièce jointe existe toujours" equals "$(api "/api/resource/File/$attached" | jq -r '.data.name')" "$attached"
+# The accounting statements the business skills use: a report has its own roles, to which
+# the role of the assistants is added.
+for report in "General Ledger" "Trial Balance" "Sales Register"; do
+  result="$(tool_call run_report "$(jq -cn --arg r "$report" '{report_name: $r, filters: {company: "Atelier Démo", from_date: "2026-01-01", to_date: "2026-12-31", fiscal_year: "2026", group_by: "Group by Voucher (Consolidated)"}}')")"
+  check "l'assistant lance le rapport « $report » ($(jq -r '.result.content[0].text // ""' <<<"$result" | head -c 40 | tr '\n' ' '))" \
+    equals "$(jq -r '.result.isError' <<<"$result")" false
+done
 # On a draft, a wrong attachment can still be corrected.
 draft_file="$(attach "Purchase Invoice" "$pi_name")"
 result="$(tool_call doc_delete "{\"doctype\":\"File\",\"name\":\"$draft_file\"}")"
