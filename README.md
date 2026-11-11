@@ -27,48 +27,57 @@ certifiée n'est pas concernée.
 Tout se règle dans **un seul fichier par client** (`clients/<client>/client.yml`) et **un fichier
 de secrets chiffré** (`secrets.yml.age`) ; un script installe tout, en posant les questions.
 
-## Fonctionnement en un coup d'œil
+## En un coup d'œil
 
 ```mermaid
 flowchart LR
+  personne(["Personne de l'entreprise"])
+
   subgraph poste["Poste de chaque personne"]
-    agent["Agent : opencode ou Claude Code<br/>prépare, ne valide rien, n'envoie rien"]
-    copies[("~/DokoPilot/#60;client#62;<br/>copies Git du contexte")]
-    personne(["La personne<br/>relit, valide, envoie"])
-    agent -- "écrit et commite" --> copies
-    personne -. "relit" .-> copies
+    direction TB
+    harnais["Harnais au choix<br/>opencode (par défaut) ou Claude Code"]
+    contrat["Contrat commun<br/>MCP · compétences métier<br/>AGENTS.md · permissions"]
+    copie["Copie du contexte<br/>~/DokoPilot/#60;client#62;"]
+    harnais --- contrat
+    harnais -- "lit, écrit, enregistre" --> copie
   end
 
-  subgraph serveur["Serveur Debian 13 de l'entrepreneur · pare-feu : seul SSH est ouvert à Internet"]
-    acces{{"Accès privé seulement<br/>Tailscale : HTTPS 443 et 8443<br/>démo : Caddy, HTTP 80 et 3000, réseau local"}}
-    dokos["Dokos v5 · Dokos AI (MCP) · eTransactions<br/>127.0.0.1:8080"]
-    forgejo["Forgejo : dépôts entreprise, direction, perso<br/>127.0.0.1:3001"]
-    restic["restic, chaque nuit"]
-    acces --> dokos
-    acces --> forgejo
-    dokos -.-> restic
-    forgejo -.-> restic
+  modele["Modèle au choix<br/>Mistral, Claude, OpenAI, local…"]
+  outils["Messagerie et agenda<br/>(dirigeant)"]
+
+  subgraph serveur["Serveur de l'entreprise, par Tailscale seulement"]
+    direction TB
+    dokos["Dokos v5 : système de référence<br/>Dokos AI (MCP) · eTransactions"]
+    forgejo["Forgejo : le contexte<br/>entreprise · direction · perso"]
+    sauvegardes["Sauvegardes chiffrées (restic)"]
+    sauvegardes -.-> dokos
+    sauvegardes -.-> forgejo
   end
 
-  subgraph installe["Poste qui installe"]
-    cli["install.sh · assistant · bin/dokopilot (Ansible)<br/>client.yml + secrets.yml.age (chiffré avec age)"]
-  end
+  pdp["Super PDP<br/>plateforme agréée"]
 
-  agent -- "MCP, jeton de l'assistant :<br/>lire, créer des brouillons" --> acces
-  personne -- "navigateur : valide dans Dokos<br/>bin/dokopilot sync : envoie le contexte relu" --> acces
-  cli == "SSH : clé, puis sudo avec mot de passe" ==> serveur
-  dokos -- "sortant" --> pdp["Super PDP<br/>factures électroniques"]
-  restic -- "sortant, chiffré" --> depot[("Dépôt de sauvegarde<br/>distant")]
+  personne --> harnais
+  personne == "valide dans Dokos" ==> dokos
+  harnais --> modele
+  contrat --> outils
+  contrat -- "Dokos par MCP :<br/>lecture et brouillons" --> dokos
+  copie -- "sync vers Forgejo :<br/>la personne relit et envoie" --> forgejo
+  dokos -- "factures électroniques" --> pdp
 ```
 
-Le schéma montre la production. Quatre choses à retenir :
+Les agents préparent : brouillons dans Dokos, enregistrements dans la copie du contexte. Une
+personne valide dans Dokos et envoie le contexte avec `bin/dokopilot sync`. Le schéma détaillé
+(conteneurs, ports, accès de maintenance) est dans [`docs/architecture.md`](docs/architecture.md).
 
-1. **Rien n'est public.** Dokos et Forgejo n'écoutent que sur `127.0.0.1` ; on les joint par
-   Tailscale (ou, en démonstration seulement, depuis le réseau local). Le pare-feu ne laisse
-   entrer d'Internet que le port SSH de maintenance.
-2. **L'agent prépare, la personne valide.** Dans Dokos, le jeton de l'assistant lit et crée des
-   brouillons ; valider, annuler ou supprimer reste un geste humain, dans le navigateur.
-3. **L'agent n'envoie rien.** Il commite dans les copies du poste ; `bin/dokopilot sync` montre à
+### Ce qui protège l'installation
+
+1. **Rien n'est public.** Dokos et Forgejo n'écoutent que sur `127.0.0.1` du serveur ; on les
+   joint par Tailscale (ou, en démonstration seulement, depuis le réseau local). Le pare-feu ne
+   laisse entrer d'Internet que le port SSH de maintenance : clé, puis sudo avec mot de passe.
+2. **Valider reste un geste humain.** Le jeton de l'assistant lit et crée des brouillons dans
+   Dokos ; valider, annuler ou supprimer se fait dans le navigateur, et la pièce jointe d'un
+   document validé ne se supprime plus.
+3. **L'agent n'envoie rien.** Il enregistre dans la copie du poste ; `bin/dokopilot sync` montre à
    la personne ce qui partirait, vérifie que la copie n'a pas été détournée, puis envoie.
 4. **Les sauvegardes partent chiffrées**, chaque nuit, vers un dépôt hors du serveur ;
    `bin/dokopilot check` échoue si la dernière a échoué ou date de plus de 36 heures.
