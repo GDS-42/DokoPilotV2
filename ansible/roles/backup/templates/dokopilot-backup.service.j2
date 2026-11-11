@@ -9,6 +9,9 @@ Requires=docker.service
 [Service]
 Type=oneshot
 ExecStart={{ backup_script }}
+TimeoutStartSec={{ backup_timeout }}
+# restic keeps its cache under $HOME/.cache: without HOME it rebuilds it at every run.
+Environment=HOME=/root
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

@@ -3,7 +3,9 @@
 
 Le dépôt personnel de {{ person.first_name }} dans {{ context_company }} : ses préférences de travail
 ([`AGENTS.md`](AGENTS.md)), sa mémoire vive ([`memoire-vive.md`](memoire-vive.md)), ses brouillons
-et ses projets personnels. Seuls {{ person.first_name }} et son assistant y ont accès.
+et ses projets personnels. Seuls {{ person.first_name }} et son assistant y ont accès ; le compte
+d'administration de l'installation (`dokopilot-admin`, que détiennent l'intégrateur et le dirigeant)
+peut techniquement lire tous les dépôts : ce dépôt est un outil de travail, pas un espace privé.
 
 - Sur son poste, ce dépôt est copié dans `~/DokoPilot/{{ context_org }}/perso/`.
 - L'agent y écrit librement et commite au nom de son assistant ; {{ person.first_name }} relit et envoie

@@ -39,7 +39,7 @@ l'installation (`sudo -K`) : l'agent, lancé ensuite sous ce même compte, ne pe
 
 | Élément | Recommandation |
 | --- | --- |
-| Serveur | VPS Debian 13 **amd64**, 4 vCPU, 8 Go de RAM (4 Go au minimum, une partition d'échange est alors créée), 80 Go de disque, hébergé en France ou dans l'Union européenne, contrat et facturation au nom de l'entreprise |
+| Serveur | VPS Debian 13 **amd64**, 4 vCPU, 8 Go de RAM (4 Go au minimum, un fichier d'échange est alors créé), 80 Go de disque, hébergé en France ou dans l'Union européenne, contrat et facturation au nom de l'entreprise |
 | Réseau privé | Un réseau (« tailnet ») Tailscale dont l'entrepreneur est propriétaire ; l'intégrateur y est invité. Vérifiez sur tailscale.com/pricing que le plan choisi convient à un usage professionnel |
 | Sauvegardes | Un compartiment S3 (ou un serveur SFTP ou REST restic) chez un autre fournisseur que le serveur, au nom de l'entreprise, avec une clé d'accès limitée à ce compartiment |
 | Facturation électronique | Le contrat Super PDP et ses identifiants (eTransactions) |
@@ -122,7 +122,7 @@ Le script fait cinq choses, dans cet ordre :
    `git`, `python3` et `python3-venv`, `age`, client OpenSSH, `make`, `curl`.
 3. **Récupère DokoPilot** à la version demandée (`git clone --depth 1 --branch v0.2.0`) dans
    `~/DokoPilotV2`. Une copie déjà là est passée à cette version, sauf si vous y avez modifié des
-   fichiers.
+   fichiers suivis par Git : le script la laisse alors telle quelle et le dit.
 4. **Prépare ses outils** : `make setup` (Ansible et ses collections dans `~/DokoPilotV2/.venv`).
 5. **Lance l'assistant** `installer/wizard.py`, qui pose les questions ci-dessous puis installe.
 
@@ -147,9 +147,12 @@ réponse proposée (Entrée pour l'accepter). Les secrets se tapent sans écho.
   utilisable, que sudo demandera. Un compte créé par cloud-init n'en a souvent pas (celui de
   `vm/make-seed.sh` n'en a pas) : donnez-lui-en un avec `sudo passwd <compte>` avant de
   commencer, sinon `install` s'arrête. Les clés de `~/.ssh/authorized_keys` restent autorisées
-  (sans leurs options `from=`, `command=`, qui sont retirées) et seront les seules à ouvrir une
-  session SSH à distance. S'il n'y en a pas, l'assistant demande la clé publique de l'ordinateur
-  qui administrera la machine (texte `ssh-ed25519 …` ou fichier `.pub`) ; sans réponse, il crée
+  et seront les seules à ouvrir une session SSH à distance ; une ligne qui porte des options
+  (`from=`, `command=`…) arrête l'assistant : retirez-la, ou ses options. S'il n'y a aucune clé,
+  l'assistant demande la clé publique de l'ordinateur qui administrera la machine (texte
+  `ssh-ed25519 …` ou fichier `.pub`). **Si vous êtes connecté par SSH avec un mot de passe, cette
+  clé est obligatoire** : après l'installation, SSH n'accepte plus que les clés (copiez-la
+  d'abord avec `ssh-copy-id`, ou collez-la à la question). Sur la console, sans réponse, il crée
   une clé propre à cette machine (`~/.ssh/id_ed25519`), car le compte doit en avoir une.
 - **Distant** : adresse du serveur (IP ou nom) ; port SSH [22] ; compte initial du serveur, donné
   par l'hébergeur ou créé à l'installation de Debian, qui ne sert qu'une fois [debian] ; votre
@@ -180,14 +183,14 @@ réponse proposée (Entrée pour l'accepter). Les secrets se tapent sans écho.
 | Raison sociale | Telle qu'elle apparaîtra dans Dokos [Atelier Démo en démo] |
 | Abréviation dans Dokos | 2 à 5 lettres ou chiffres [tirée de la raison sociale] |
 | SIREN | 9 chiffres, clé de contrôle vérifiée (production seulement) |
-| Le dirigeant : prénom, nom, courriel, identifiant, un assistant ? | L'identifiant nomme ses comptes et son dépôt `perso-<id>` [tiré du prénom] ; l'assistant [oui] est l'identité de son agent dans Dokos et dans Forgejo |
+| Le dirigeant : prénom, nom, courriel, identifiant | L'identifiant nomme ses comptes et son dépôt `perso-<id>` [tiré du prénom] ; il diffère de l'identifiant de l'installation. Le dirigeant a toujours un assistant (la question n'est pas posée) : c'est l'identité de son agent dans Dokos et dans Forgejo |
 | Ajouter une autre personne ? | [non] ; chaque membre a les mêmes questions ; son assistant n'existe que dans Forgejo en version 0.2 ([D-29](decisions.md)) |
 
 **Étape 5 — Réseau, messagerie, agenda, import**
 
 | Question | Réponses |
 | --- | --- |
-| Comment joindre Dokos et Forgejo ? | En démo : `lan` (réseau local, HTTP) ou `tailscale` [lan] ; en production, toujours Tailscale |
+| Comment joindre Dokos et Forgejo ? | En démo : `lan` (réseau local, HTTP) ou `tailscale` [lan] ; en production, toujours Tailscale. Pour un serveur distant qui a une adresse publique (un serveur loué), `lan` est refusé : le pare-feu n'y admet que les adresses privées |
 | Clé d'authentification Tailscale | Avec Tailscale : `tskey-auth-…`, saisie masquée, rangée dans les secrets chiffrés |
 | Dépôt de sauvegarde restic | Production : dépôt distant (`s3:…`, `sftp:…`, `rest:…`) ; pour S3, identifiant et clé secrète, saisis masqués et rangés dans les secrets ; sinon, à ajouter ensuite (`restic_env`) |
 | Brancher une messagerie ? | [non] ; sinon serveur IMAP, port [993], chiffrement, identifiant, adresse affichée, mot de passe (masqué, écrit dans `~/.config/dokopilot/<id>/mail-password`) |
@@ -262,7 +265,8 @@ sh install.sh --answers mes-reponses.yml
 
 Partez de [`installer/answers.example.yml`](../installer/answers.example.yml) : les clés sont en
 anglais, les valeurs s'écrivent comme à la question ; une clé absente prend la valeur proposée,
-et l'assistant s'arrête en nommant une réponse manquante sans valeur proposée. Un secret ne
+une clé inconnue (une faute de frappe) est refusée, et l'assistant s'arrête en nommant une
+réponse manquante sans valeur proposée. Un secret ne
 s'écrit jamais dans ce fichier : donnez `<nom>_env` (une variable d'environnement) ou
 `<nom>_file` (un fichier). `resume: non` recommence une installation commencée ;
 `stop_after: config` (ou `install`, `harness`) s'arrête après cette étape. Les mots de passe sudo

@@ -11,11 +11,14 @@ helper, which reads the person's token from the private file named in the payloa
 never goes into a remote URL, a clone's configuration or a command line.
 
 Every git call runs with the GIT_* environment variables removed, GIT_TERMINAL_PROMPT=0 (git
-never waits for a password), core.hooksPath=/dev/null and core.fsmonitor=false (nothing
-planted in a clone runs), and, for network calls, the credential helper list reset to the
-store helper alone (no keychain of the workstation receives the token). Before a clone is
-touched, its local configuration is checked against an allowlist: a key that could run a
-program or send the traffic elsewhere (an agent could have written it) stops the run.
+never waits for a password), GIT_NO_REPLACE_OBJECTS=1 (a replacement object cannot show one
+commit and send another), core.hooksPath=/dev/null and core.fsmonitor=false (nothing planted
+in a clone runs), and, for network calls, the credential helper list reset to the store helper
+alone (no keychain of the workstation receives the token). Before a clone is touched, it is
+audited: a local configuration key outside an allowlist (it could run a program or send the
+traffic elsewhere), replacement objects or grafts, a nested repository or a submodule (their
+own configuration and hooks would run at the person's next plain `git status`) stop the run:
+an agent could have written them.
 
 Standard library only.
 """
@@ -45,9 +48,17 @@ ALLOWED_KEYS = {
     "rebase.autostash", "init.defaultbranch", "remote.origin.url", "remote.origin.fetch",
 }
 ALLOWED_PATTERNS = (re.compile(r"^branch\..+\.(remote|merge|rebase)$"), re.compile(r"^color\.[a-z.]+$"))
-# Files that steer the agents: a change received from the server is never taken silently
-# (the same list as RULE_PATHS in bin/dokopilot, whose sync shows and asks).
-RULE_PATHS = ("AGENTS.md", "CLAUDE.md", ".agents", ".claude", ".opencode", "opencode.json", ".mcp.json", ".gitignore")
+# Files that steer the agents, as Git pathspecs: a change received from the server is never
+# taken silently (bin/dokopilot sync reads this list, shows the change and asks). They match
+# at any depth: Claude Code and opencode also load the AGENTS.md, CLAUDE.md, CLAUDE.local.md
+# and .claude/ of a sub-folder once a file of that folder is read
+# (https://code.claude.com/docs/en/memory, https://opencode.ai/docs/rules/).
+RULE_PATHS = tuple(f":(glob){pattern}" for pattern in (
+    "**/AGENTS.md", "**/CLAUDE.md", "**/CLAUDE.local.md", "**/.agents/**", "**/.claude/**", "**/.opencode/**",
+    "**/opencode.json", "**/opencode.jsonc", "**/.mcp.json", "**/.gitignore", "**/.gitattributes", ".gitmodules",
+))
+# Clones that live inside another clone of the workspace (ignored by it, audited on their own).
+NESTED_CLONES = {"entreprise": ("direction", "perso")}
 
 
 class Failure(Exception):
@@ -63,14 +74,14 @@ class Run:
 
 def clean_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    env.update(GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="", SSH_ASKPASS="", LC_ALL="C")
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="", SSH_ASKPASS="", GIT_NO_REPLACE_OBJECTS="1", LC_ALL="C")
     env.update(extra or {})
     return env
 
 
 def git(path: Path | None, *args: str, credential_file: str = "", env: dict[str, str] | None = None,
         check: bool = True) -> subprocess.CompletedProcess[str]:
-    cmd = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+    cmd = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.quotePath=true"]
     if credential_file:
         cmd += ["-c", "credential.helper=", "-c", "credential.helper=" + helper(credential_file)]
     if path is not None:
@@ -104,8 +115,49 @@ def local_config(path: Path) -> list[tuple[str, str]]:
     return entries
 
 
+def nested_repositories(path: Path, label: str) -> list[str]:
+    """Git repositories inside a clone, other than the workspace's own nested clones. Git
+    runs the configuration and the hooks of such a repository (fsmonitor, for instance) as
+    soon as someone runs a plain `git status` above it."""
+    skip = {path / ".git", *(path / name for name in NESTED_CLONES.get(label, ()))}
+    found = []
+    for root, dirs, files in os.walk(path, followlinks=False):
+        here = Path(root)
+        for name in [*dirs, *files]:
+            if name == ".git" and here != path:
+                found.append(str(here.relative_to(path)))
+        dirs[:] = [name for name in dirs if name != ".git" and here / name not in skip]
+    return sorted(found)
+
+
+def audit_content(path: Path, label: str) -> None:
+    """Refuses what could show the person one thing and send another, or run a program at
+    their next git command: replacement objects, grafts, submodules, nested repositories."""
+    problems = []
+    if git(path, "for-each-ref", "--count=1", "refs/replace/", check=False).stdout.strip():
+        problems.append("des objets de remplacement (git replace)")
+    if (path / ".git" / "info" / "grafts").exists():
+        problems.append("des greffes d'historique (.git/info/grafts)")
+    staged = git(path, "ls-files", "--stage", "-z", check=False).stdout.split("\0")
+    links = sorted(entry.partition("\t")[2] for entry in staged if entry.startswith("160000 "))
+    if links or (path / ".gitmodules").exists():
+        problems.append("un sous-module ou un dépôt Git enregistré comme tel (" + ", ".join(links[:5] or [".gitmodules"]) + ")")
+    nested = nested_repositories(path, label)
+    if nested:
+        problems.append("un dépôt Git dans un sous-dossier (" + ", ".join(nested[:5]) + ")")
+    if problems:
+        raise Failure(
+            f"La copie « {label} » ({path}) contient {' ; '.join(problems)}.\n"
+            "Un agent a pu les créer : ils peuvent montrer un contenu et en envoyer un autre, ou lancer un programme "
+            "à votre prochaine commande git. Ne lancez pas git dans ce dossier ; retirez-les (supprimez le sous-dossier "
+            f"ou son dossier .git ; « git -C {path} replace -d <objet> » pour un objet de remplacement), "
+            "puis relancez « bin/dokopilot harness »."
+        )
+
+
 def audit(path: Path, label: str) -> None:
-    """Refuses a clone whose configuration could run a program or redirect its traffic."""
+    """Refuses a clone whose configuration could run a program or redirect its traffic, or
+    whose content hides what would be sent (audit_content)."""
     entries = local_config(path)
     unexpected = sorted({key for key, _ in entries
                          if key.lower() not in ALLOWED_KEYS and not any(p.match(key.lower()) for p in ALLOWED_PATTERNS)})
@@ -121,6 +173,7 @@ def audit(path: Path, label: str) -> None:
             f"Vérifiez {path}/.git/config, retirez ces lignes (git -C {path} config --local --unset <réglage>), "
             "puis relancez « bin/dokopilot harness »."
         )
+    audit_content(path, label)
 
 
 def config_values(path: Path, key: str) -> list[str]:

@@ -47,8 +47,10 @@
     _web: "{{ _cfg.Web | default({}) | dict2items | rejectattr('key', 'search', ':' ~ _forgejo_port ~ '$') | map(attribute='value') | list }}"
   ansible.builtin.set_fact:
     _proxy_serve_port: "{{ _port }}"
+    # Funnel would publish Dokos on the Internet: a publication that has it is replaced.
     _proxy_serve_ok: >-
-      {{ (_tcp | list) == [_port]
+      {{ (_cfg.AllowFunnel | default({}, true) | dict2items | selectattr('value') | list | length == 0)
+         and (_tcp | list) == [_port]
          and (_tcp[_port][_kind] | default(false)) | bool
          and _web | length == 1
          and (_web[0].Handlers | default({}) | list) == ['/']

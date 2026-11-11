@@ -48,6 +48,7 @@ MSG_MAIN_ONLY = (
 )
 MSG_BAD_INPUT = "Garde DokoPilot : données du hook illisibles, action bloquée par précaution."
 MSG_BAD_POLICY = "Garde DokoPilot : politique introuvable ou illisible, action bloquée par précaution."
+MSG_UNEXPECTED = "Garde DokoPilot : erreur inattendue du garde, action bloquée par précaution."
 MSG_NO_MARK = (
     "Garde DokoPilot : impossible d'enregistrer que cette session lit la messagerie ; "
     "lecture bloquée par précaution."
@@ -220,4 +221,10 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        status = main(sys.argv[1:])
+    except Exception:  # noqa: BLE001 - whatever goes wrong, the call is blocked, never let through
+        # Exit 2 blocks on every version of Claude Code; another status would only block
+        # where the hook's `onFailure: block` is understood.
+        status = block(MSG_UNEXPECTED)
+    sys.exit(status)

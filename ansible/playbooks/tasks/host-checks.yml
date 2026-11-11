@@ -43,8 +43,20 @@
   loop:
     - unattended-upgrades.service
     - dokopilot-backup.timer
+    - dokopilot-backup.service
   register: _enabled
   failed_when: false
+
+# Written by the backup script after each complete backup; absent before the first one.
+- name: Read the date of the last complete backup
+  ansible.builtin.stat:
+    path: "{{ backup_stamp_file | default('/var/lib/dokopilot/last-backup') }}"
+  register: _backup_stamp
+
+- name: Read the current time of the server
+  ansible.builtin.command: date +%s
+  register: _host_now
+  changed_when: false
 
 - name: Read the Tailscale state
   ansible.builtin.command: tailscale status --json
@@ -78,6 +90,14 @@
     _unit_states: >-
       {{ dict(_enabled.results | map(attribute='item')
               | zip(_enabled.results | map(attribute='status', default={}) | map(attribute='UnitFileState', default=''))) }}
+    # Result of the last run of the backup service since the last boot (« success » when it
+    # has not run yet), and age of the last complete backup in hours (-1 before the first one).
+    _backup_result: >-
+      {{ (_enabled.results | selectattr('item', 'equalto', 'dokopilot-backup.service') | map(attribute='status', default={})
+          | map(attribute='Result', default='success') | first) | default('success', true) }}
+    _backup_age_hours: >-
+      {{ (((_host_now.stdout | int) - (_backup_stamp.stat.mtime | int)) // 3600) if _backup_stamp.stat.exists else -1 }}
+    _backup_max_age_hours: "{{ backup_max_age_hours | default(36) | int }}"
     _ts: "{{ (_ts_status.stdout | default('{}') | from_json) if (_ts_status.rc | default(1)) == 0 else {} }}"
     _serve: "{{ (_ts_serve.stdout | default('{}') | from_json) if (_ts_serve.rc | default(1)) == 0 else {} }}"
   ansible.builtin.set_fact:
@@ -102,6 +122,15 @@
         msg: "Mises à jour de sécurité automatiques activées"
       - ok: "{{ not (host_checks_backup | default(true) | bool) or _unit_states['dokopilot-backup.timer'] | default('') == 'enabled' }}"
         msg: "Sauvegarde quotidienne programmée (dokopilot-backup.timer)"
+      - ok: >-
+          {{ not (host_checks_backup | default(true) | bool)
+             or (_backup_result == 'success' and (_backup_age_hours | int) <= (_backup_max_age_hours | int)) }}
+        msg: >-
+          Dernière sauvegarde : {{ 'aucune encore (la première part cette nuit)' if (_backup_age_hours | int) < 0
+                                  else 'complète, il y a ' ~ _backup_age_hours ~ ' h' }}{{
+            '' if _backup_result == 'success' else ' ; la dernière exécution a ÉCHOUÉ (journalctl -u dokopilot-backup)' }}{{
+            '' if (_backup_age_hours | int) <= (_backup_max_age_hours | int)
+            else ' ; trop ancienne (plus de ' ~ _backup_max_age_hours ~ ' h : journalctl -u dokopilot-backup)' }}
       - ok: "{{ dp.network.mode != 'tailscale' or _ts.BackendState | default('') == 'Running' }}"
         msg: "Tailscale : connecté ({{ dp.network.mode }})"
       - ok: "{{ dp.network.mode != 'tailscale' or (_serve.AllowFunnel | default({}) | dict2items | selectattr('value') | list | length == 0) }}"

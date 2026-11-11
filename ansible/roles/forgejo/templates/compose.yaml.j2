@@ -10,6 +10,10 @@ services:
   forgejo:
     image: {{ forgejo_image }}
     restart: unless-stopped
+    # The user of the rootless image, with a primary group no account of the server has
+    # (the image's own group stays supplementary): see tasks/main.yml.
+    user: "1000:{{ forgejo_container_gid }}"
+    group_add: ["1000"]
     security_opt:
       - no-new-privileges:true
     environment:
@@ -17,7 +21,8 @@ services:
       # volume, saved by the backups) keeps it afterwards.
       SECRET_KEY: ${FORGEJO_SECRET_KEY:?FORGEJO_SECRET_KEY is missing from .env}
       INSTALL_LOCK: "true"
-      FORGEJO__DEFAULT__APP_NAME: "{{ dp.client.company_name | replace('"', '') | replace('$', '$$') }} — contexte"
+      # to_json quotes the name for YAML (a quote or a backslash in a company name).
+      FORGEJO__DEFAULT__APP_NAME: {{ (dp.client.company_name ~ ' — contexte') | replace('$', '$$') | to_json }}
       FORGEJO__server__ROOT_URL: "{{ dokopilot_forgejo_url }}"
       FORGEJO__server__HTTP_PORT: "3000"
       # Clones over HTTPS only (C-2): no SSH server, no SSH clone URL.

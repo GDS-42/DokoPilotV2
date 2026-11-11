@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# No change of owner in tests/backup/run.sh (it runs without root).
+exit 0

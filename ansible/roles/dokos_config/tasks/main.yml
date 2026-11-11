@@ -55,6 +55,8 @@
       read_doctypes: "{{ dokos_config_assistant_read_doctypes }}"
       draft_flags: "{{ dokos_config_assistant_draft_flags }}"
       read_flags: "{{ dokos_config_assistant_read_flags }}"
+      protected_attachment_doctypes: "{{ dokos_config_protected_attachment_doctypes }}"
+      reports: "{{ dokos_config_assistant_reports }}"
 
 - name: Report the DocTypes that do not exist in this version of Dokos
   ansible.builtin.debug:

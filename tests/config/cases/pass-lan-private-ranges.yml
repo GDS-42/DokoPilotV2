@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Private ranges of every accepted family, a single address, and addresses for the SSH port.
+# expect-output: 100.64.0.0/10
+network: { mode: lan, lan: { allowed_cidrs: ["192.168.1.0/24", "10.20.0.0/16", "172.20.0.0/16", "100.64.0.0/10", "fd12:3456::/32", "192.168.1.50"] } }
+maintenance: { ssh_allowed_from: ["192.0.2.0/24", "2001:db8::/32", "198.51.100.7"] }

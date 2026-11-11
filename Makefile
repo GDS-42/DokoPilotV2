@@ -29,12 +29,14 @@ lint: ## Vérifier YAML, rôles Ansible, scripts shell et Python
 	$(PY) -m compileall -q stack demo harness tests ansible/roles installer
 
 .PHONY: test
-test: ## Tests rapides (CLI, configuration, installateur, harnais), sans serveur
+test: ## Tests rapides (CLI, configuration, installateur, harnais, scripts de sauvegarde), sans serveur
 	$(PY) -m unittest discover -s tests/cli
 	$(PY) -m unittest discover -s tests/installer -p 'test_*.py'
 	$(PY) -m unittest discover -s tests/context -p 'test_*.py'
+	$(PY) -m unittest discover -s tests/stack -p 'test_*.py'
 	tests/config/run.sh
 	tests/harness/run.sh
+	tests/backup/run.sh
 
 .PHONY: test-system
 test-system: ## Rôles système contre un conteneur Debian 13 systemd (Docker requis)

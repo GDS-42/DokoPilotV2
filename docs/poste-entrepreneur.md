@@ -231,9 +231,15 @@ d'un autre.
   dans Dokos, la messagerie et l'agenda.
 - Identité : le shell de l'agent commite au nom de l'assistant (opencode : extension
   `dokopilot-guard` ; Claude Code : `env` de `.claude/settings.json`).
-- Copies Git : `bin/dokopilot harness` ne lance aucun programme d'une copie (hooks et
-  `core.fsmonitor` désactivés) et s'arrête si la configuration d'une copie contient un réglage
-  inattendu (un agent aurait pu l'écrire pour qu'un programme tourne à votre place).
+- Copies Git : `bin/dokopilot harness` et `bin/dokopilot sync` ne lancent aucun programme d'une
+  copie (hooks et `core.fsmonitor` désactivés) et s'arrêtent si une copie contient un réglage Git
+  inattendu, un objet de remplacement (`git replace`), un sous-module ou un dépôt Git dans un
+  sous-dossier (un agent aurait pu les créer pour qu'un programme tourne à votre place, ou pour
+  montrer un contenu et en envoyer un autre).
+- Fichiers qui pilotent l'agent : `CLAUDE.md`, `CLAUDE.local.md`, `.claude/`, `.opencode/`,
+  `opencode.json`, `.mcp.json` et `.agents/` sont refusés à l'écriture dans tous les
+  sous-dossiers, y compris la boîte de réception et `perso/` où l'agent écrit librement : les
+  harnais chargent les consignes d'un dossier dès qu'ils y lisent un fichier.
 - Messagerie : le compte n'accorde que les brouillons (`allowed_mutations = ["draft"]`) et n'a
   aucun serveur d'envoi ; les brouillons attendent dans le dossier Brouillons.
 - Claude Code : bac à sable du système (bubblewrap, Seatbelt sur macOS) pour les commandes, qui
@@ -264,14 +270,19 @@ ouvrez une nouvelle session.
 - **Les commandes de l'Atelier écrivent partout dans le dossier de travail.** Les règles
   d'écriture (libre dans la boîte de réception et `perso/`, sur accord ailleurs) valent pour les
   outils de modification de fichiers ; une commande du shell de l'Atelier peut modifier n'importe
-  quel fichier du dossier. Rien ne quitte le poste sans `bin/dokopilot sync` : relisez
-  `git status` et `git diff` avant d'envoyer.
+  quel fichier du dossier, et y créer un dépôt Git dont les réglages s'exécuteraient à votre
+  prochain `git status`. Rien ne quitte le poste sans `bin/dokopilot sync`, qui refuse une telle
+  copie et montre ce qui partirait : **relisez avec `bin/dokopilot sync`** (répondez non pour ne
+  rien envoyer) plutôt qu'avec des commandes git tapées à la main dans un dossier où l'Atelier a
+  travaillé.
 - **`bin/dokopilot sync` vérifie la copie, pas son contenu.** Il lance Git avec vos identifiants,
   hors de tout bac à sable, mais sans les crochets (hooks) ni le fsmonitor d'une copie, sans les
   variables `GIT_*` de la session, et avec vos seuls identifiants de Forgejo. Avant tout envoi, il
   refuse une copie dont la configuration Git a été modifiée (réglage hors de la liste attendue,
-  autre assistant d'identifiants, adresse du serveur qui n'est pas celle de Forgejo), comme
-  `bin/dokopilot harness`. Ce qu'il envoie, c'est ce que l'agent a commité : relisez-le.
+  autre assistant d'identifiants, adresse qui n'est pas le dépôt attendu de Forgejo en HTTP(S)),
+  ou qui contient un objet de remplacement, un sous-module ou un dépôt imbriqué, comme
+  `bin/dokopilot harness`. Il affiche la différence nette avec le serveur et signale tout envoi
+  qui change des règles d'agents. Ce qu'il envoie, c'est ce que l'agent a commité : relisez-le.
 - **Le jeton dans Claude Code.** Les identifiants sont lus par `headersHelper`, `apiKeyHelper` et
   l'assistant d'identifiants de Git, hors du bac à sable des commandes. Si bubblewrap et socat
   manquent, Claude Code lance les commandes sans bac à sable (sauf avec
@@ -302,9 +313,16 @@ ouvrez une nouvelle session.
 - **Sans modèle configuré**, opencode choisit le modèle des titres lui-même : OpenCode 2 prend le
   petit modèle du fournisseur de la session, OpenCode 1 peut prendre un modèle hébergé par
   opencode. Renseignez `models.bureau` (ou `models.small`) pour l'éviter.
-- **L'extension et les accroches sont dans le dossier de travail.** Les règles les protègent de
-  l'agent, et le bac à sable de Claude Code aussi ; un programme lancé hors du harnais peut les
-  modifier, comme tout fichier de l'utilisateur.
+- **L'extension et les accroches sont dans le dossier de travail.** Les règles les protègent des
+  outils de modification de fichiers, et le bac à sable de Claude Code les protège aussi des
+  commandes. Avec opencode, qui n'a pas de bac à sable, une commande de l'Atelier peut les
+  réécrire, comme tout programme lancé hors du harnais : `bin/dokopilot harness` les remet en
+  place (l'ancien fichier est gardé en `.bak`).
+- **Tout sur une seule machine : l'agent et les conteneurs.** Le compte sous lequel l'agent
+  tourne porte en général l'identifiant des conteneurs (uid 1000). Il ne peut pas lire leurs
+  fichiers ni leur environnement (les conteneurs ont un groupe qu'aucun compte n'a), mais une
+  commande de l'agent peut arrêter leurs processus
+  ([securite.md](securite.md#comptes-du-serveur-et-conteneurs)).
 - **Les modes sans question** : `opencode --auto` (OpenCode 1) approuve toutes les questions sauf
   les refus. Ne l'utilisez pas. Le mode « bypass » de Claude Code est désactivé par la
   configuration du projet.

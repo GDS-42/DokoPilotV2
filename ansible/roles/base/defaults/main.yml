@@ -16,6 +16,9 @@ base_packages:
   - locales
   - jq
   - rsync
+  # sysctl (the base role) and ss (check.yml): absent from minimal images.
+  - procps
+  - iproute2
 
 # Locales generated on the server; the first one is the default system language.
 base_locales:

@@ -74,7 +74,21 @@
     mode: "0600"
   no_log: true
 
+# The containers run as uid 1000, the uid of the first account created on most machines
+# (often a maintenance account, or the person's own account when the server is this
+# machine). Linux lets a process read the files and the environment of another one through
+# /proc only when the user AND the group both match (ptrace access check): with a primary
+# group that no account has, a server account of uid 1000 cannot read the containers' data
+# without sudo. The image's own group (1000) stays as a supplementary group.
+- name: Create the group of the containers (no member, never an account's group)
+  ansible.builtin.group:
+    name: "{{ dokopilot_container_group }}"
+    system: true
+  register: _forgejo_container_group
+
 - name: Write the Compose project of Forgejo
+  vars:
+    forgejo_container_gid: "{{ _forgejo_container_group.gid | default(0) }}"
   ansible.builtin.template:
     src: compose.yaml.j2
     dest: "{{ dokopilot_forgejo_dir }}/compose.yaml"

@@ -38,12 +38,19 @@ limitant l'accès au serveur aux personnes concernées et aux ports 443 et 8443
   (`maintenance_sudo_password`), que `bin/dokopilot` fournit à Ansible ; en mode « tout sur cette
   machine », celui de votre compte (voir plus bas). Journal de sudo dans `/var/log/sudo.log`. Les
   règles sudo sans mot de passe des comptes de maintenance et du compte initial (cloud-init,
-  hébergeur) sont retirées.
+  hébergeur) sont retirées. En production, `maintenance.sudo_requires_password: false` est
+  refusé : une clé SSH volée ne doit pas donner à elle seule les droits root.
+- **Réglages effectifs vérifiés** : l'installation lit les réglages SSH tels qu'ils s'appliquent à
+  chaque compte de maintenance (`sshd -T -C user=…`). Si un fichier de l'hébergeur lu avant celui
+  de DokoPilot, ou un bloc `Match`, rouvre root ou les mots de passe, elle s'arrête et le dit.
 - **fail2ban** bannit les adresses après 5 échecs en 10 minutes, avec une durée qui augmente en
   cas de récidive.
-- Le compte initial de l'hébergeur ou de l'installation de Debian sert au premier passage
-  (`bootstrap`), puis perd son mot de passe, ses groupes et ses clés ; root ne se connecte jamais
-  en SSH.
+- Le compte initial de l'hébergeur ou de l'installation de Debian (`server.bootstrap_user`, que
+  l'assistant renseigne) sert au premier passage (`bootstrap`). Dès ce passage, SSH le refuse ;
+  au passage suivant, lancé avec un compte de maintenance, il perd son mot de passe, ses groupes
+  et ses clés. root ne se connecte jamais en SSH. Si vous amorcez à la main avec `--user`,
+  déclarez ce compte dans `server.bootstrap_user`, sinon il garde son mot de passe et ses règles
+  sudo (SSH le refuse tout de même).
 - Retirer un intervenant de `client.yml` puis relancer l'installation verrouille son compte et
   vide ses clés.
 - Les comptes de maintenance ne sont jamais dans le groupe `docker` (équivalent root) : ils
@@ -64,13 +71,18 @@ Quand le serveur est la machine où vous lancez le script (`server.local: true`)
   mot de passe ([D-31](decisions.md)).
 - **Le serveur SSH est installé s'il manque**, avec les réglages durcis écrits avant
   l'installation du paquet, pour qu'il démarre déjà durci : clé uniquement, pas de root, groupe
-  `dokopilot-maint` seulement. Les clés de votre `~/.ssh/authorized_keys` restent autorisées
-  (les options d'une ligne, comme `from=` ou `command=`, sont retirées : l'assistant le signale) ;
-  sans clé, l'assistant vous en demande une ou en crée une pour la machine.
+  `dokopilot-maint` seulement. Les clés de votre `~/.ssh/authorized_keys` restent autorisées ;
+  une ligne qui porte des options (`from=`, `command=`…) arrête l'assistant, car la clé serait
+  réécrite sans elles : retirez la ligne ou ses options. Sans clé, l'assistant vous en demande
+  une ou, sur la console, en crée une pour la machine. **Si vous êtes connecté par SSH avec un
+  mot de passe**, il exige la clé publique de l'ordinateur que vous utilisez : après
+  l'installation, SSH n'accepte plus que les clés, et cette session serait la dernière.
 - **Le pare-feu et le durcissement ne coupent pas la session locale** ; Dokos et Forgejo sont
   joignables en `http://localhost` et `http://localhost:3000` depuis la machine elle-même.
-- **L'agent tourne sur le serveur**, sous votre compte. Les secrets du serveur restent lisibles
-  par root seulement (sudo demande votre mot de passe) ; la clé age
+- **L'agent tourne sur le serveur**, sous votre compte. Les fichiers de secrets du serveur
+  (`/etc/dokopilot`, `.env`) restent lisibles par root seulement (sudo demande votre mot de
+  passe), et les données des conteneurs ne se lisent pas depuis votre compte (« Comptes du
+  serveur et conteneurs », plus bas) ; la clé age
   (`~/.config/dokopilot/age-identity.txt`), qui déchiffre tous les secrets du client, et les
   jetons sont dans `~/.config/dokopilot`, que le harnais refuse à l'agent, avec les limites
   décrites dans [poste-entrepreneur.md](poste-entrepreneur.md#6-risques-résiduels). sudo ne
@@ -91,10 +103,18 @@ qui conviennent.
   brouillon) ;
 - **jamais** valider, annuler, amender ni supprimer ; jamais System Manager, Administrator ni AI
   Manager ; aucun accès au point de vente ni à la caisse ;
+- **les pièces jointes des documents validés sont protégées** : Dokos laisse quiconque peut
+  modifier un document supprimer ses fichiers joints, même une fois le document validé.
+  L'installation active donc, sur les factures, paiements, écritures, commandes, réceptions,
+  livraisons, devis, relances, mouvements de stock et opérations bancaires, la propriété
+  « Protéger les fichiers joints » de Dokos : la pièce d'un document validé ne se supprime
+  plus, ni par un assistant ni par une personne (celle d'un brouillon se corrige encore) ;
+- les rapports comptables dont les compétences se servent (grand livre, balance, registres des
+  ventes et des achats, comptes clients et fournisseurs) lui sont ouverts en lecture ;
 - les règles de Dokos AI (réglages par type de document, journal d'audit) s'ajoutent à ces
   permissions ;
 - les tests `tests/stack/` vérifient, sur une vraie instance, qu'un assistant ne peut ni valider
-  ni supprimer une facture.
+  ni supprimer une facture, ni supprimer la pièce jointe d'une facture validée.
 
 La validation d'un document reste donc un geste humain dans Dokos, quel que soit le harnais ou le
 modèle utilisé.
@@ -121,8 +141,11 @@ serveur ; aucun jeton accepté dans l'adresse d'une requête. Liste complète :
 
 Un membre et son assistant ne lisent ni `direction` ni le `perso` d'un autre ; `bin/dokopilot
 check` vérifie que chaque compte lit ses dépôts et aucun autre. Une personne retirée de
-`users.people` voit ses comptes désactivés (connexion interdite, jeton supprimé) ; son dépôt
-`perso-<id>` est gardé ([exploitation.md](exploitation.md)).
+`users.people` voit ses comptes désactivés : connexion interdite, **tous** ses jetons supprimés
+(ceux qu'elle avait créés dans l'interface aussi), mot de passe remplacé par un aléa que personne
+ne garde ; son dépôt `perso-<id>` est gardé ([exploitation.md](exploitation.md)). Seul
+`dokopilot-admin` administre Forgejo : un compte déclaré qu'on aurait promu administrateur est
+rétrogradé par `install`.
 
 **Jetons.** Chaque compte de personne a un jeton Git de portée `write:repository`, limité à ses
 dépôts ; il est remplacé quand ces dépôts changent ([D-30](decisions.md)), et il faut alors
@@ -159,24 +182,35 @@ avant d'envoyer quoi que ce soit :
   lancerait un programme ou enverrait ailleurs, qu'un agent aurait pu écrire, arrête tout) ;
 - l'assistant d'identifiants est exactement celui de DokoPilot, sur le fichier
   `git-credentials` de ce client ;
-- la copie a une seule adresse de serveur, qui est celle de Forgejo inscrite dans ce fichier, sans
-  identifiants dans l'adresse ;
+- la copie a une seule adresse de serveur : le dépôt attendu (`<client>/entreprise`,
+  `<client>/direction` ou `<client>/perso-<id>`) sur le Forgejo inscrit dans ce fichier, en
+  HTTP(S), sans identifiants dans l'adresse ; une adresse SSH, `git://`, un dossier local ou un
+  autre dépôt du même serveur sont refusés ;
+- la copie ne contient ni objet de remplacement (`git replace`), ni greffe d'historique, ni
+  sous-module, ni dépôt Git dans un sous-dossier : ils permettraient de montrer un contenu et
+  d'en envoyer un autre, ou de lancer un programme à votre prochaine commande git ;
 - aucun conflit ni rebasage n'est en cours, et aucun fichier suivi n'est modifié sans être
   enregistré (les fichiers nouveaux non enregistrés restent sur le poste, signalés) ;
 - aucune branche ne suit un autre serveur que `origin`, et le dossier `.git` ne renvoie pas
   ailleurs.
 
 Ensuite, `sync` **montre** à la personne ce qu'il va envoyer (auteur, message et fichiers de
-chaque enregistrement) et attend son accord (`--yes` l'en dispense) ; sans accord, rien n'est
-envoyé. Les règles des agents reçues du serveur (`AGENTS.md`, `CLAUDE.md`, `.agents/`,
-`.gitignore`…) sont montrées et doivent être acceptées, même avec `--yes`, et
+chaque enregistrement, puis la différence nette avec le serveur, et un avertissement si l'envoi
+change des règles d'agents) et attend son accord (`--yes` l'en dispense) ; sans accord, rien
+n'est envoyé. Les caractères de contrôle d'un message ou d'un nom de fichier ne sont jamais
+affichés tels quels. Les règles des agents reçues du serveur (`AGENTS.md`, `CLAUDE.md`,
+`CLAUDE.local.md`, `.agents/`, `.claude/`, `.opencode/`, `opencode.json`, `.mcp.json`,
+`.gitignore`, `.gitattributes`, **à n'importe quelle profondeur** : les harnais chargent aussi
+les règles d'un sous-dossier) sont montrées et doivent être acceptées, même avec `--yes`, et
 `bin/dokopilot harness` ne les prend jamais en silence : un membre, ou son agent, ne peut pas
 changer les règles de l'agent du dirigeant sans que celui-ci les voie. Forgejo refuse en outre
 toute réécriture (force push) et toute suppression de la branche principale des dépôts.
 
 Puis il lance `git pull --rebase` et `git push` sans les crochets (hooks) ni le fsmonitor de la
-copie, sans les variables `GIT_*` de la session, sans jamais demander de mot de passe, avec les
-seuls identifiants de la personne, et s'arrête au premier problème. Il vérifie la copie, pas son
+copie, sans les variables `GIT_*` de la session, sans objets de remplacement
+(`GIT_NO_REPLACE_OBJECTS`), sans jamais demander de mot de passe, avec les seuls identifiants de
+la personne, et s'arrête au premier problème. Les commandes git qu'il conseille de taper portent
+les mêmes options. Il vérifie la copie, pas son
 contenu : ce qu'il envoie est ce que l'agent a commité, relisez-le
 ([poste-entrepreneur.md](poste-entrepreneur.md#6-risques-résiduels)).
 
@@ -186,8 +220,15 @@ contenu : ce qu'il envoie est ce que l'agent a commité, relisez-le
   de `recipients.txt` (intégrateur, entrepreneur, clé de secours conservée hors ligne). Votre clé
   age privée est dans `~/.config/dokopilot/age-identity.txt` : sauvegardez-la dans un
   gestionnaire de mots de passe.
-- Pendant une installation, les secrets déchiffrés n'existent que dans un dossier temporaire
-  privé, effacé à la fin ; Ansible ne les affiche jamais (`no_log`).
+- Pendant une commande, les secrets déchiffrés n'existent que dans un dossier privé de
+  `~/.config/dokopilot/.run/` (0700, à côté de la clé age, dans le dossier que le harnais refuse
+  aux agents ; jamais dans `/tmp`), effacé à la fin, y compris sur Ctrl-C, terminal fermé ou
+  session SSH perdue ; ce qu'une coupure de courant aurait laissé est effacé à la commande
+  suivante. Ansible ne les affiche jamais (`no_log`).
+- Les destinataires des secrets (`recipients.txt`) ne changent qu'à la demande : `bin/dokopilot
+  init <client> --recipient <clé>` valide la clé, rechiffre, puis écrit le fichier. Un autre
+  poste n'ajoute jamais sa propre clé à un client existant. Retirer une ligne ne suffit pas à
+  révoquer quelqu'un qui a déjà lu les secrets : changez alors les mots de passe concernés.
 - L'assistant d'installation n'écrit aucun secret en clair dans `clients/` : la clé Tailscale et
   les identifiants de sauvegarde vont dans les secrets chiffrés, et son fichier d'état
   (`.assistant-etat.json`) n'en contient jamais. Un fichier de réponses (`--answers`) ne peut pas
@@ -199,7 +240,29 @@ contenu : ce qu'il envoie est ce que l'agent a commité, relisez-le
 - Sur le serveur : fichiers `/etc/dokopilot/*` (dont les identifiants de Forgejo et les jetons des
   assistants) et `.env` des projets Compose, lisibles par root seulement.
 - Le mot de passe du dépôt de sauvegarde doit aussi être conservé **hors du serveur** : sans lui,
-  une sauvegarde est inutilisable.
+  une sauvegarde est inutilisable. En mode « tout sur cette machine », la clé age, les secrets
+  chiffrés et ce mot de passe sont sur le même disque que les données : gardez-en une copie
+  ailleurs (le résumé de fin d'installation le rappelle).
+
+### Comptes du serveur et conteneurs
+
+Linux laisse un processus lire les fichiers et l'environnement d'un autre par `/proc` quand ils
+ont le même utilisateur **et** le même groupe. Or le premier compte créé sur une machine porte en
+général l'identifiant 1000 (uid et gid), comme l'utilisateur des conteneurs : souvent le premier
+compte de maintenance, ou votre compte en mode « tout sur cette machine », sous lequel l'agent
+tourne.
+
+- **Forgejo** : l'image tourne sous 1000:1000. Sans précaution, un tel compte lisait sans sudo la
+  base, `app.ini` et tous les dépôts, `direction` compris (reproduit sur l'image réelle).
+  L'installation lance donc le conteneur avec un groupe principal que n'a aucun compte
+  (`dokopilot-ct`, groupe système sans membre), le groupe de l'image restant secondaire.
+- **Dokos** : l'image officielle tourne sous l'utilisateur 1000 avec le groupe `root` (0), que
+  n'a aucun compte ordinaire : rien à changer.
+
+Les tests de la pile réelle (`tests/context/run.sh`, `tests/stack/run.sh`) vérifient pour chaque
+conteneur qu'un processus d'uid et de gid 1000 ne lit ni ses fichiers ni son environnement. Il
+reste qu'un compte d'uid 1000 peut envoyer un signal à ces processus (les arrêter) : sur un
+serveur distant, n'ouvrez de session de maintenance qu'à des personnes de confiance.
 
 ## Poste et agents
 

@@ -10,6 +10,11 @@
 #   dokopilot-backup [--pre-restore]
 # --pre-restore : sauvegarde de l'état actuel juste avant une restauration, étiquetée
 # « dokopilot-pre-restore » (hors de la rétention quotidienne ; les 5 dernières sont gardées).
+#
+# Chaque instantané porte aussi l'étiquette « install:<identifiant> » de cette installation
+# ({{ backup_install_id_file }}, créé à la première sauvegarde). La rétention ne
+# supprime que les instantanés de cette installation : un serveur de test ou de remplacement
+# qui utilise le même dépôt n'efface jamais ceux de la production.
 set -euo pipefail
 umask 077
 
@@ -17,6 +22,9 @@ stack_dir={{ dokopilot_stack_dir | quote }}
 site={{ dp.dokos.site_name | quote }}
 host_dir={{ dokopilot_bench_backup_dir | quote }}
 env_file={{ backup_env_file | quote }}
+install_id_file={{ backup_install_id_file | quote }}
+lock_file={{ backup_lock_file | quote }}
+stamp_file={{ backup_stamp_file | quote }}
 keep_daily={{ dp.backup.keep.daily | int }}
 keep_weekly={{ dp.backup.keep.weekly | int }}
 keep_monthly={{ dp.backup.keep.monthly | int }}
@@ -32,7 +40,7 @@ case "${1:-}" in
   *) echo "Option inconnue : $1 (attendu : --pre-restore)" >&2; exit 2 ;;
 esac
 
-exec 9>/run/lock/dokopilot-backup.lock
+exec 9>"$lock_file"
 if ! flock -n 9; then
   echo "Une sauvegarde ou une restauration est déjà en cours." >&2
   exit 1
@@ -42,6 +50,19 @@ set -a
 # shellcheck disable=SC1090
 . "$env_file"
 set +a
+
+if [[ ! -s "$install_id_file" ]]; then
+  tr -d '-' < /proc/sys/kernel/random/uuid | cut -c1-16 > "$install_id_file"
+fi
+install_tag="install:$(tr -cd 'a-f0-9' < "$install_id_file")"
+if [[ "$install_tag" == install: ]]; then
+  echo "Identifiant d'installation illisible : $install_id_file." >&2
+  exit 1
+fi
+
+# A backup killed during its upload or its pruning (power cut, reboot) leaves a lock that
+# would block every later run: restic never removes it on its own. Only stale locks go.
+restic unlock --quiet || true
 
 compose() {
   docker compose --project-directory "$stack_dir" -f "$stack_dir/compose.yaml" "$@"
@@ -64,6 +85,7 @@ fi
 paths=("$work" "$stack_dir")
 excludes=(--exclude "$stack_dir/.env")
 forgejo_work=""
+forgejo_failed=0
 if [[ -n "$forgejo_dir" ]]; then
   if [[ -f "$forgejo_dir/compose.yaml" ]]; then
     fcompose() {
@@ -81,26 +103,32 @@ if [[ -n "$forgejo_dir" ]]; then
       > "$forgejo_work/forgejo-data.tar" || copied=$?
     fcompose start forgejo
     trap - EXIT
-    if (( copied != 0 )); then
-      echo "La copie des données de Forgejo a échoué (code $copied)." >&2
-      exit 1
+    if (( copied != 0 )) || ! tar -tf "$forgejo_work/forgejo-data.tar" > /dev/null 2>&1; then
+      # Dokos is still sent: one failing part must not leave the other without a backup.
+      echo "La copie des données de Forgejo a échoué (code $copied) : la sauvegarde de Dokos continue sans elle." >&2
+      rm -rf "$forgejo_work"
+      forgejo_work=""
+      forgejo_failed=1
+    else
+      paths+=("$forgejo_work" "$forgejo_dir")
+      excludes+=(--exclude "$forgejo_dir/.env")
     fi
-    paths+=("$forgejo_work" "$forgejo_dir")
-    excludes+=(--exclude "$forgejo_dir/.env")
   else
     echo "Forgejo n'est pas encore installé ($forgejo_dir) : le contexte n'est pas sauvegardé." >&2
   fi
 fi
 
 echo "Envoi vers le dépôt restic…"
-restic backup --quiet --tag "$tag" --tag "site:$site" "${excludes[@]}" "${paths[@]}"
+restic backup --quiet --tag "$tag" --tag "site:$site" --tag "$install_tag" "${excludes[@]}" "${paths[@]}"
 
+# « --tag a,b » : les instantanés qui portent les deux étiquettes, donc ceux de cette
+# installation seulement.
 if [[ "$tag" == dokopilot ]]; then
   echo "Rétention : $keep_daily jours, $keep_weekly semaines, $keep_monthly mois…"
-  restic forget --quiet --tag dokopilot --prune \
+  restic forget --quiet --tag "dokopilot,$install_tag" --prune \
     --keep-daily "$keep_daily" --keep-weekly "$keep_weekly" --keep-monthly "$keep_monthly"
 else
-  restic forget --quiet --tag "$tag" --keep-last 5 --prune
+  restic forget --quiet --tag "$tag,$install_tag" --keep-last 5 --prune
 fi
 
 echo "Vérification du dépôt…"
@@ -110,6 +138,15 @@ rm -rf "$work"
 if [[ -n "$forgejo_work" ]]; then
   rm -rf "$forgejo_work"
 fi
-restic snapshots --tag "$tag" --latest 1 --compact
+restic snapshots --tag "$tag,$install_tag" --latest 1 --compact
+if (( forgejo_failed != 0 )); then
+  echo "Sauvegarde INCOMPLÈTE : Dokos est sauvegardé, les dépôts de contexte (Forgejo) ne le sont pas." >&2
+  exit 1
+fi
+if [[ "$tag" == dokopilot ]]; then
+  # Read by `bin/dokopilot check`: the date of the last complete backup.
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$stamp_file"
+  chmod 0644 "$stamp_file"
+fi
 echo "Sauvegarde terminée."
 {% endraw %}

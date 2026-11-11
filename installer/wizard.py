@@ -362,7 +362,7 @@ class Ui:
         if self.assume_yes:
             print(f"  {question} {'oui' if default else 'non'} (automatique)")
             return default
-        return parse_bool(self.ask("", question, default="oui" if default else "non", hint="O/n" if default else "o/N"))
+        return bool(self.ask("", question, default="oui" if default else "non", parse=parse_bool, hint="O/n" if default else "o/N"))
 
 
 # --------------------------------------------------------------------------- validation
@@ -531,7 +531,11 @@ def check_key_source(text: str) -> str:
     if not text:
         return ""
     candidate = Path(text).expanduser()
-    if candidate.is_file():
+    try:
+        is_file = candidate.is_file()
+    except OSError:  # a pasted key is too long to be a file name
+        is_file = False
+    if is_file:
         key = ssh_key_from_text(candidate.read_text(encoding="utf-8", errors="replace").strip())
         if not key:
             raise Invalid(f"{candidate} ne contient pas de clé SSH publique.")
@@ -545,7 +549,10 @@ def check_key_source(text: str) -> str:
 def check_pub_path(text: str) -> str:
     if not text.endswith(".pub"):
         raise Invalid("le chemin d'une clé publique, qui finit par .pub (ex. ~/.ssh/id_ed25519.pub).")
-    return text
+    if text.startswith(("~", "/")):
+        return text
+    # A relative path would be read from another directory by Ansible.
+    return str(Path(text).absolute())
 
 
 # --------------------------------------------------------------------------- helpers
@@ -656,6 +663,23 @@ def local_mode_problems() -> list[str]:
     if down:
         problems.append(f"sites injoignables depuis cette machine : {', '.join(down)}")
     return problems
+
+
+def is_public_address(address: str) -> bool:
+    """True for an IP address routed on the Internet (a name is not resolved: unknown)."""
+    try:
+        return ipaddress.ip_address(address.strip()).is_global
+    except ValueError:
+        return False
+
+
+def remote_session() -> str:
+    """The address this session comes from when it was opened over SSH, else ''."""
+    for name in ("SSH_CONNECTION", "SSH_CLIENT"):
+        value = os.environ.get(name, "").split()
+        if value:
+            return value[0]
+    return "une autre machine" if os.environ.get("SSH_TTY") else ""
 
 
 def authorized_keys(path: Path) -> tuple[list[str], int]:
@@ -862,12 +886,34 @@ def step_where(ui: Ui, state: State) -> None:
             )
             a["ssh_public_keys"] = keys
         else:
+            remote = remote_session()
+            if remote:
+                # After the installation SSH accepts keys only. A key created here would stay on
+                # this machine: the session in use would be the last one.
+                print(
+                    f"  Vous êtes connecté à cette machine par SSH (depuis {remote}) avec un mot de passe, sans clé autorisée.\n"
+                    "  Après l'installation, SSH n'accepte plus que les clés : il faut donc la clé publique de l'ordinateur\n"
+                    "  que vous utilisez en ce moment, sinon vous ne pourriez plus vous reconnecter. Sur cet ordinateur :\n"
+                    "    cat ~/.ssh/id_ed25519.pub        (ssh-keygen -t ed25519 la crée si elle manque)\n"
+                    "  puis collez ici la ligne affichée."
+                )
+
+            def needed_key(text: str) -> str:
+                key = check_key_source(text)
+                if remote and not key:
+                    raise Invalid(
+                        "une clé est nécessaire : sans elle, cette session SSH serait la dernière. Collez la clé publique de "
+                        "votre ordinateur, ou arrêtez (Ctrl-C) et lancez depuis cet ordinateur : "
+                        f"ssh-copy-id {me.pw_name}@<cette machine>, puis relancez l'assistant."
+                    )
+                return key
+
             key = ui.ask(
                 "ssh_public_key",
                 "Clé SSH publique de l'ordinateur depuis lequel vous administrerez cette machine à distance "
-                "(texte « ssh-ed25519 … » ou chemin d'un fichier .pub ; Entrée : aucune)",
+                "(texte « ssh-ed25519 … » ou chemin d'un fichier .pub" + ("" if remote else " ; Entrée : aucune") + ")",
                 default="",
-                parse=check_key_source,
+                parse=needed_key,
             )
             if key:
                 a["ssh_public_keys"] = [key]
@@ -1018,7 +1064,7 @@ def step_models(ui: Ui, state: State) -> None:
     print(f"  Clé enregistrée dans {path} (lisible par vous seul). Elle n'est écrite ni dans clients/ ni dans les secrets.")
 
 
-def ask_person(ui: Ui, index: int, role: str, taken: set[str], demo: bool) -> dict[str, Any]:
+def ask_person(ui: Ui, index: int, role: str, taken: set[str], demo: bool, client: str = "") -> dict[str, Any]:
     prefix = f"people.{index}"
     dirigeant = role == "dirigeant"
     example = demo and dirigeant
@@ -1030,9 +1076,13 @@ def ask_person(ui: Ui, index: int, role: str, taken: set[str], demo: bool) -> di
         check_person_id(text)
         if text in taken:
             raise Invalid(f"l'identifiant « {text} » est déjà pris.")
+        if text == client:
+            raise Invalid(f"« {text} » est l'identifiant de l'installation (l'organisation dans Forgejo) : choisissez-en un autre, le prénom par exemple.")
         return text
 
-    suggestion = next((s for s in (slug(first), slug(f"{first}-{last}"), slug(email.split("@")[0])) if s and s not in taken), None)
+    suggestion = next(
+        (s for s in (slug(first), slug(f"{first}-{last}"), slug(email.split("@")[0])) if s and s not in taken and s != client), None
+    )
     person_id = ui.ask(f"{prefix}.id", "Identifiant (comptes et dépôt perso-<id>)", default=suggestion, parse=unique_id)
     if dirigeant:
         # The dirigeant's assistant is the identity of the agent of this computer: always there.
@@ -1061,7 +1111,7 @@ def step_company(ui: Ui, state: State) -> None:
     people: list[dict[str, Any]] = []
     taken: set[str] = set()
     print("  Le dirigeant (il valide dans Dokos ce que les agents préparent) :")
-    people.append(ask_person(ui, 0, "dirigeant", taken, demo))
+    people.append(ask_person(ui, 0, "dirigeant", taken, demo, state.client))
     while True:
         index = len(people)
         if ui.scripted:
@@ -1071,7 +1121,7 @@ def step_company(ui: Ui, state: State) -> None:
         if not more:
             break
         print(f"  Personne {index + 1} (membre : comptes dans Forgejo pour le contexte) :")
-        people.append(ask_person(ui, index, "membre", taken, demo))
+        people.append(ask_person(ui, index, "membre", taken, demo, state.client))
     emails = [person["email"] for person in people]
     if len(set(emails)) != len(emails):
         raise Stop("Deux personnes ont le même courriel : relancez l'assistant et corrigez-les.", 2)
@@ -1085,15 +1135,37 @@ def step_network(ui: Ui, state: State) -> None:
         print("  En production, Dokos n'est joignable que par Tailscale, votre réseau privé chiffré.")
         mode = "tailscale"
     else:
-        mode = ui.choice(
-            "network",
-            "Comment joindre Dokos et Forgejo ?",
-            [
-                Option("lan", "réseau local : depuis les adresses privées (box, VM), en HTTP", ("local", "reseau local")),
-                Option("tailscale", "Tailscale : réseau privé chiffré, depuis vos appareils où qu'ils soient"),
-            ],
-            "lan",
-        )
+        # In lan mode the firewall only admits private addresses: a rented server with a public
+        # address would install for an hour, then be unreachable from this computer.
+        public = a.get("where") == "distant" and is_public_address(a.get("server_address", ""))
+        if public:
+            print(
+                f"  Le serveur a une adresse publique ({a['server_address']}) : le mode « réseau local » n'ouvre Dokos et Forgejo\n"
+                "  qu'aux adresses privées, vous ne pourriez pas les joindre depuis ce poste. Sur un serveur loué, choisissez Tailscale."
+            )
+
+        def reachable_mode(value: str) -> str:
+            if public and value == "lan":
+                raise Invalid("avec une adresse publique, seul Tailscale convient (le réseau local est fait pour une VM ou une box).")
+            return value
+
+        while True:
+            mode = ui.choice(
+                "network",
+                "Comment joindre Dokos et Forgejo ?",
+                [
+                    Option("lan", "réseau local : depuis les adresses privées (box, VM), en HTTP", ("local", "reseau local")),
+                    Option("tailscale", "Tailscale : réseau privé chiffré, depuis vos appareils où qu'ils soient"),
+                ],
+                "tailscale" if public else "lan",
+            )
+            try:
+                reachable_mode(mode)
+                break
+            except Invalid as error:
+                if ui.scripted:
+                    raise Stop(f"Réponse « network » refusée dans {ui.source} : {error}", 2) from None
+                print(f"    ✗ {error}")
     a["network"] = mode
     a["tailscale_key_pending"] = False
     if mode == "tailscale":
@@ -1444,7 +1516,12 @@ def print_summary(state: State) -> None:
         print("             Dans Dokos, le dirigeant crée lui-même les comptes des salariés, avec les rôles qui conviennent.")
     print(f"  Espace     ~/DokoPilot/{client} (copies du contexte ; l'agent y travaille)")
     print("\nProchaines étapes :")
-    print("  1. Sauvegardez ~/.config/dokopilot/age-identity.txt dans votre gestionnaire de mots de passe : sans elle, les secrets sont illisibles.")
+    print("  1. Conservez hors de cette machine, dans votre gestionnaire de mots de passe :")
+    print("       - la clé ~/.config/dokopilot/age-identity.txt : sans elle, les secrets de l'installation sont illisibles ;")
+    print(f"       - le mot de passe des sauvegardes : {cli()} secrets {client} show restic_password ;")
+    print(f"       - une copie du dossier {clients_dir() / client} (réglages et secrets chiffrés).")
+    if a["where"] == "local":
+        print("     Tout est aujourd'hui sur ce seul disque : s'il est perdu sans ces copies, les sauvegardes distantes sont illisibles.")
     agent = "opencode" if a["harness_default"] == "opencode" else "claude"
     login = " (Claude Code : /login au premier lancement)" if "claude-code" in a["harness_enabled"] and a["claude_code_auth"] == "subscription" else ""
     print(f"  2. Lancez l'agent : cd ~/DokoPilot/{client} && {agent}{login}")
@@ -1520,7 +1597,47 @@ def load_answers(path: str) -> dict[str, Any]:
         raise Stop(f"Fichier de réponses invalide : {file} ({error}).", 2) from None
     if not isinstance(data, dict):
         raise Stop(f"{file} doit contenir un dictionnaire YAML (voir installer/answers.example.yml).", 2)
+    # A misspelt key would silently give the proposed value (« profil: production » would
+    # install a demo): every key must be one the assistant reads.
+    unknown = [f"{prefix}{key}" for prefix, node, allowed in answer_sections(data) for key in node if str(key) not in allowed]
+    if unknown:
+        raise Stop(
+            f"Réponses inconnues dans {file} : {', '.join(sorted(map(str, unknown)))}. "
+            "Vérifiez l'orthographe avec installer/answers.example.yml.",
+            2,
+        )
     return data
+
+
+def with_indirections(*names: str) -> set[str]:
+    """Secret answers: the key itself (refused later with its explanation), <key>_env, <key>_file."""
+    return {f"{name}{suffix}" for name in names for suffix in ("", "_env", "_file")}
+
+
+ANSWER_KEYS: dict[str, set[str]] = {
+    "": {"resume", "stop_after", "where", "server", "maintenance_user", "ssh_public_key", "ssh_key_create", "profile", "client_id",
+         "harness", "models", "claude_code_auth", "company", "people", "network", "backup", "mail", "calendar", "import_path",
+         *with_indirections("tailscale_auth_key")},
+    "server": {"address", "ssh_port", "bootstrap_user"},
+    "models": {"provider", "provider_id", "provider_needs_key", "bureau", "atelier", "small", "keep_api_key", *with_indirections("api_key")},
+    "company": {"name", "abbr", "siren"},
+    "backup": {"repository", *with_indirections("s3_access_key_id", "s3_secret_access_key")},
+    "mail": {"enabled", "imap_host", "imap_port", "imap_tls", "username", "email", *with_indirections("password")},
+    "calendar": {"enabled", "caldav_url", "username", *with_indirections("password")},
+}
+PERSON_ANSWER_KEYS = {"first_name", "last_name", "email", "id", "assistant"}
+
+
+def answer_sections(data: dict[str, Any]) -> list[tuple[str, dict[str, Any], set[str]]]:
+    """(prefix shown, mapping, allowed keys) for the top level and each section of the answers."""
+    sections = [("", data, ANSWER_KEYS[""])]
+    for name, allowed in ANSWER_KEYS.items():
+        if name and isinstance(data.get(name), dict):
+            sections.append((f"{name}.", data[name], allowed))
+    for index, person in enumerate(data.get("people") or [] if isinstance(data.get("people"), list) else []):
+        if isinstance(person, dict):
+            sections.append((f"people.{index}.", person, PERSON_ANSWER_KEYS))
+    return sections
 
 
 def main(argv: list[str] | None = None) -> int:

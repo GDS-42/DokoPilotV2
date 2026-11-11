@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# One entry is one range: a second, public one hidden after a comma is refused.
+# expect: Exposition réseau invalide
+network: { mode: lan, lan: { allowed_cidrs: ["10.0.0.0/8, 0.0.0.0/0"] } }

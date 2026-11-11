@@ -224,6 +224,135 @@ class People(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(wizard.ask_person(member, 1, "membre", {"camille"}, False)["assistant"])
 
+    def test_a_person_id_is_not_the_client_id(self) -> None:
+        person = {"first_name": "Atelier", "last_name": "Martin", "email": "camille@exemple.test"}
+        with contextlib.redirect_stdout(io.StringIO()):
+            got = wizard.ask_person(wizard.Ui({"people": [person]}, "r.yml", False), 0, "dirigeant", set(), False, "atelier")
+        # The proposed identifier skips the client id, which names the organisation in Forgejo.
+        self.assertEqual(got["id"], "atelier-martin")
+        refused = wizard.Ui({"people": [{**person, "id": "atelier"}]}, "r.yml", False)
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(wizard.Stop) as stop:
+            wizard.ask_person(refused, 0, "dirigeant", set(), False, "atelier")
+        self.assertIn("identifiant de l'installation", str(stop.exception))
+
+
+class Typed(unittest.TestCase):
+    """Answers typed on the terminal (the tests above read them from a file)."""
+
+    def typed(self, *lines: str):
+        answers = iter(lines)
+        return mock.patch("builtins.input", lambda _prompt="": next(answers))
+
+    def test_an_unexpected_confirmation_is_asked_again(self) -> None:
+        ui = wizard.Ui(None, "", False)
+        out = io.StringIO()
+        with self.typed("ok", "oui"), contextlib.redirect_stdout(out):
+            self.assertTrue(ui.confirm("Écrire cette configuration et lancer l'installation ?"))
+        self.assertIn("répondez oui ou non", out.getvalue())
+        with self.typed(""), contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(ui.confirm("Remplacer ?", default=False))
+
+    def test_a_long_pasted_key_is_not_taken_for_a_file_name(self) -> None:
+        rsa = "ssh-rsa " + "A" * 700 + " camille@portable"
+        self.assertEqual(wizard.check_key_source(rsa), rsa)
+
+    def test_a_relative_key_path_becomes_absolute(self) -> None:
+        self.assertEqual(wizard.check_pub_path("~/.ssh/id_ed25519.pub"), "~/.ssh/id_ed25519.pub")
+        self.assertEqual(wizard.check_pub_path("cles/id.pub"), str(Path("cles/id.pub").absolute()))
+        with self.assertRaises(wizard.Invalid):
+            wizard.check_pub_path("~/.ssh/id_ed25519")
+
+
+class LocalModeOverSsh(unittest.TestCase):
+    """Everything on this machine, from an SSH session opened with a password: after the
+    installation SSH accepts keys only, so a key created on the machine itself would lock
+    the person out."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        home = Path(self.tmp.name)
+        me = mock.Mock(pw_name="camille", pw_dir=str(home), pw_gecos="Camille Martin")
+        for patch in (
+            mock.patch.object(wizard, "current_user", lambda: me),
+            mock.patch.object(wizard, "local_mode_problems", lambda: []),
+            mock.patch.object(wizard, "create_ssh_key", lambda *a, **k: self.created.append(a)),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.home = home
+        self.created: list = []
+
+    def run_step(self, answers: dict, environment: dict) -> dict:
+        state = wizard.State()
+        clean = {k: v for k, v in os.environ.items() if k not in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY")}
+        with mock.patch.dict(os.environ, {**clean, **environment}, clear=True), contextlib.redirect_stdout(io.StringIO()):
+            wizard.step_where(wizard.Ui({"where": "local", **answers}, "r.yml", False), state)
+        return state.answers
+
+    def test_without_a_key_the_session_would_be_the_last_one(self) -> None:
+        ssh = {"SSH_CONNECTION": "203.0.113.7 51234 192.0.2.10 22"}
+        with self.assertRaises(wizard.Stop) as stop:
+            self.run_step({}, ssh)
+        self.assertIn("une clé est nécessaire", str(stop.exception))
+        self.assertEqual(self.created, [])
+        # With the key of the computer in use, the installation goes on.
+        self.assertEqual(self.run_step({"ssh_public_key": KEY}, ssh)["ssh_public_keys"], [KEY])
+        # A key already authorized for the account is kept, and nothing is asked.
+        (self.home / ".ssh").mkdir()
+        (self.home / ".ssh" / "authorized_keys").write_text(KEY + "\n", encoding="utf-8")
+        self.assertEqual(self.run_step({}, ssh)["ssh_public_keys"], [KEY])
+
+    def test_on_the_console_a_key_of_the_machine_is_still_created(self) -> None:
+        answers = self.run_step({}, {})
+        self.assertEqual(answers["ssh_public_key_files"], ["~/.ssh/id_ed25519.pub"])
+        self.assertEqual(len(self.created), 1)
+
+
+class AnswersFile(unittest.TestCase):
+    def load(self, text: str) -> dict:
+        with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False, encoding="utf-8") as handle:
+            handle.write(text)
+        self.addCleanup(os.unlink, handle.name)
+        return wizard.load_answers(handle.name)
+
+    def test_the_example_is_accepted(self) -> None:
+        example = wizard.load_answers(str(REPO / "installer" / "answers.example.yml"))
+        self.assertEqual(example["where"], "distant")
+
+    def test_a_misspelt_key_is_refused(self) -> None:
+        for text, unknown in (
+            ("profil: production\n", "profil"),
+            ("server: {adress: 192.0.2.1}\n", "server.adress"),
+            ("people:\n  - {first_name: A, assistent: non}\n", "people.0.assistent"),
+            ("mail: {enabled: oui, pasword_env: X}\n", "mail.pasword_env"),
+        ):
+            with self.subTest(unknown=unknown), self.assertRaises(wizard.Stop) as stop:
+                self.load(text)
+            self.assertIn(unknown, str(stop.exception))
+        accepted = self.load("tailscale_auth_key_env: TS\nbackup: {s3_access_key_id_env: A, s3_secret_access_key_file: /x}\n"
+                             "models: {api_key_env: CLE, provider: autre, provider_id: x, provider_needs_key: oui}\n")
+        self.assertEqual(accepted["tailscale_auth_key_env"], "TS")
+
+
+class Network(unittest.TestCase):
+    def network(self, answers: dict, address: str) -> str:
+        state = wizard.State()
+        state.answers.update(client_id="atelier", profile="demo", where="distant", server_address=address)
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(wizard, "CONFIG_ROOT", Path("/nonexistent")):
+            wizard.step_network(wizard.Ui({"mail": {"enabled": "non"}, "calendar": {"enabled": "non"}, **answers}, "r.yml", False), state)
+        return state.answers["network"]
+
+    def test_lan_mode_is_refused_on_a_public_address(self) -> None:
+        # A rented server: the firewall of the lan mode only admits private addresses.
+        with self.assertRaises(wizard.Stop) as stop:
+            self.network({"network": "lan"}, "51.15.20.30")  # the documentation ranges are not global
+        self.assertIn("seul Tailscale convient", str(stop.exception))
+        self.assertEqual(self.network({"network": "lan"}, "192.168.122.10"), "lan")
+        self.assertEqual(self.network({"network": "lan"}, "serveur.exemple.test"), "lan")
+        self.assertTrue(wizard.is_public_address("2a01:4f8::1"))
+        self.assertFalse(wizard.is_public_address("100.101.102.103"))
+
 
 class Summary(unittest.TestCase):
     def test_missing_workstation_programs_are_listed_not_installed(self) -> None:

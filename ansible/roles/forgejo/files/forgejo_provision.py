@@ -259,6 +259,10 @@ def check_logins(payload: dict[str, Any], accounts: list[dict[str, Any]]) -> Non
     org = payload["org"]["name"].lower()
     prefix = payload["settings"]["assistant_prefix"].lower()
     problems = []
+    if org in RESERVED_USER_NAMES or org.endswith(RESERVED_USER_SUFFIXES) or org == admin:
+        # Organisations and accounts share one namespace in Forgejo.
+        raise Failure(f"identifiant du client refusé, Forgejo n'a pas été modifié : « {payload['org']['name']} » est un nom "
+                      "réservé par Forgejo et ne peut pas nommer l'organisation. Choisissez un autre client.id (client.yml).")
     for account in accounts:
         login = account["user"]
         lower = login.lower()
@@ -308,13 +312,24 @@ def ensure_admin(payload: dict[str, Any], api: Api, run: Run) -> None:
     token_name = "dokopilot-bootstrap-" + secrets.token_hex(4)
     token = compose(payload, "forgejo", "admin", "user", "generate-access-token", "--username", admin["user"],
                     "--token-name", token_name, "--scopes", "write:admin", "--raw").stdout.strip().splitlines()[-1].strip()
-    api.call("PATCH", f"/admin/users/{quote(admin['user'])}", token=token, body={
-        "login_name": admin["user"], "source_id": 0, "password": admin["password"], "email": admin["email"],
-        "must_change_password": False, "admin": True, "prohibit_login": False, "active": True})
-    status, me = api.call("GET", "/user", ok=(200, 401, 403))
-    if status != 200:
-        raise Failure(f"connexion de {admin['user']} refusée après la mise à jour de son mot de passe ({status})")
-    api.call("DELETE", f"/users/{quote(admin['user'])}/tokens/{quote(token_name)}", ok=(204, 404))
+    try:
+        api.call("PATCH", f"/admin/users/{quote(admin['user'])}", token=token, body={
+            "login_name": admin["user"], "source_id": 0, "password": admin["password"], "email": admin["email"],
+            "must_change_password": False, "admin": True, "prohibit_login": False, "active": True})
+        status, me = api.call("GET", "/user", ok=(200, 401, 403))
+        if status != 200:
+            raise Failure(f"connexion de {admin['user']} refusée après la mise à jour de son mot de passe ({status}) ; "
+                          "ce compte ne doit pas avoir de double authentification : l'installation s'en sert")
+    finally:
+        # The administration token does not outlive this call. Forgejo manages tokens with the
+        # password only: when the password could not be set, the deletion is refused here, and
+        # the next successful run removes the token (every token of this prefix goes).
+        try:
+            for stale in api.paged(f"/users/{quote(admin['user'])}/tokens"):
+                if str(stale.get("name", "")).startswith("dokopilot-bootstrap-"):
+                    api.call("DELETE", f"/users/{quote(admin['user'])}/tokens/{stale['id']}", ok=(204, 404))
+        except Failure:
+            pass
 
 
 def ensure_org(payload: dict[str, Any], api: Api, run: Run) -> None:
@@ -385,9 +400,13 @@ def ensure_accounts(payload: dict[str, Any], api: Api, run: Run) -> dict[str, st
             continue
         wanted = {"email": account["email"], "full_name": account["full_name"], "restricted": account["restricted"],
                   "prohibit_login": False, "active": True}
-        if any(current.get(key) != value for key, value in wanted.items()):
-            api.call("PATCH", f"/admin/users/{quote(user)}", body={"login_name": user, "source_id": 0, **wanted})
-            run.note(f"compte {user} mis à jour" + (" (réactivé)" if current.get("prohibit_login") else ""))
+        # Only dokopilot-admin administers Forgejo: an administrator reads every repository.
+        if any(current.get(key) != value for key, value in wanted.items()) or current.get("is_admin"):
+            api.call("PATCH", f"/admin/users/{quote(user)}", body={"login_name": user, "source_id": 0, "admin": False, **wanted})
+            run.note(f"compte {user} mis à jour"
+                     + (" (droits d'administration de Forgejo retirés)" if current.get("is_admin") else "")
+                     + (f" (RÉACTIVÉ : c'est le compte d'une personne retirée auparavant ; il retrouve le dépôt perso de « {user} »"
+                        " et son historique. Pour une autre personne, choisissez un autre id)" if current.get("prohibit_login") else ""))
     return created
 
 
@@ -552,7 +571,10 @@ def ensure_credentials(payload: dict[str, Any], api: Api, run: Run, created: dic
 
 
 def disable_removed(payload: dict[str, Any], api: Api, run: Run, removed_members: set[str]) -> list[str]:
-    """Accounts no longer configured: login prohibited, token deleted, credential file deleted."""
+    """Accounts no longer configured: login prohibited, every token deleted (those the
+    person created in the web interface too), password replaced by a random one that is kept
+    nowhere, credential file deleted. If the id is declared again later, the account starts
+    from a new initial password and a new token: nothing the previous holder kept works."""
     directory = Path(payload["credentials_dir"])
     expected = {account["user"] for account in payload["accounts"]} | {payload["admin"]["user"]}
     files = {path.stem: path for path in directory.glob("*.json")} if directory.is_dir() else {}
@@ -561,11 +583,13 @@ def disable_removed(payload: dict[str, Any], api: Api, run: Run, removed_members
         current = api.get(f"/users/{quote(user)}", missing_ok=True) if re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", user) else None
         if current is not None and not current.get("is_admin"):
             if not current.get("prohibit_login"):
-                api.call("PATCH", f"/admin/users/{quote(user)}", body={"login_name": user, "source_id": 0, "prohibit_login": True})
+                api.call("PATCH", f"/admin/users/{quote(user)}", body={
+                    "login_name": user, "source_id": 0, "prohibit_login": True,
+                    "password": random_password(payload["password_length"]), "must_change_password": False})
                 run.note(f"compte {user} désactivé (retiré de la configuration)")
             for token in api.paged(f"/users/{quote(user)}/tokens"):
-                if token["name"] == payload["token"]["name"]:
-                    api.call("DELETE", f"/users/{quote(user)}/tokens/{token['id']}", ok=(204, 404))
+                api.call("DELETE", f"/users/{quote(user)}/tokens/{token['id']}", ok=(204, 404))
+                run.note(f"compte {user} : jeton « {token.get('name', '?')} » supprimé")
             disabled.append(user)
         if user in files:
             files[user].unlink(missing_ok=True)
@@ -661,6 +685,14 @@ def step_check(payload: dict[str, Any]) -> dict[str, Any]:
         ("oauth2", "ENABLED", "false", "OAuth désactivé"),
         ("cron.update_checker", "ENABLED", "false", "pas de recherche de mises à jour (télémétrie)"),
         ("mirror", "ENABLED", "false", "miroirs désactivés (aucune copie poussée vers l'extérieur)"),
+        ("repository", "FORCE_PRIVATE", "true", "dépôts toujours privés"),
+        ("repository", "DISABLE_MIGRATIONS", "true", "pas de migration depuis un autre serveur"),
+        ("security", "DISABLE_WEBHOOKS", "true", "webhooks désactivés"),
+        ("security", "DISABLE_QUERY_AUTH_TOKEN", "true", "aucun jeton accepté dans l'adresse d'une requête"),
+        ("openid", "ENABLE_OPENID_SIGNIN", "false", "OpenID désactivé"),
+        ("actions", "ENABLED", "false", "Actions désactivées"),
+        ("packages", "ENABLED", "false", "registre de paquets désactivé"),
+        ("federation", "ENABLED", "false", "fédération désactivée"),
     ]:
         value = ini.get(section, key, fallback="").strip().lower()
         if value != wanted:

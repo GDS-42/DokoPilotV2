@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The SSH port is written into sshd, the firewall and fail2ban: a number only.
+# expect: server.ssh_port est un nombre de 1 à 65535
+server: { ssh_port: "22\nPermitRootLogin yes" }

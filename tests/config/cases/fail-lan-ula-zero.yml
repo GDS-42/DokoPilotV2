@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# fc00::/0 is every IPv6 address, not a unique local range.
+# expect: Exposition réseau invalide
+network: { mode: lan, lan: { allowed_cidrs: ["fc00::/0"] } }

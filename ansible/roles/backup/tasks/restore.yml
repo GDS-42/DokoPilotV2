@@ -7,15 +7,16 @@
     that:
       - restore_confirmed | default(false) | bool
     fail_msg: >-
-      La restauration écrase la base et les fichiers actuels de Dokos. Confirmez-la :
-      bin/dokopilot restore <client> --confirm [--snapshot <id>]
+      La restauration écrase la base et les fichiers actuels de Dokos (ou, avec --forgejo, les
+      dépôts de contexte et les comptes de Forgejo). Confirmez-la :
+      bin/dokopilot restore <client> --confirm [--snapshot <id>] [--forgejo] [--no-pre-backup]
       (ou -e restore_confirmed=true avec ansible-playbook).
 
 - name: List the available snapshots
   ansible.builtin.shell: |
     set -euo pipefail
     set -a; . {{ backup_env_file | quote }}; set +a
-    restic snapshots --tag dokopilot --compact
+    restic snapshots --compact
   args:
     executable: /bin/bash
   register: _restore_snapshots
@@ -27,11 +28,10 @@
 
 - name: Restore the snapshot and migrate the site
   ansible.builtin.command:
-    argv:
-      - "{{ restore_script }}"
-      - --confirm
-      - --snapshot
-      - "{{ restore_snapshot | default('latest', true) }}"
+    argv: >-
+      {{ [restore_script, '--confirm', '--snapshot', restore_snapshot | default('latest', true) | string]
+         + (['--forgejo'] if restore_forgejo | default(false) | bool else [])
+         + (['--no-pre-backup'] if restore_no_pre_backup | default(false) | bool else []) }}
   register: _restore_run
   changed_when: true
 

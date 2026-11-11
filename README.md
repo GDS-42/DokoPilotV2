@@ -69,6 +69,34 @@ Les agents préparent : brouillons dans Dokos, enregistrements dans la copie du 
 personne valide dans Dokos et envoie le contexte avec `bin/dokopilot sync`. Le schéma détaillé
 (conteneurs, ports, accès de maintenance) est dans [`docs/architecture.md`](docs/architecture.md).
 
+### Ce qui protège l'installation
+
+1. **Rien n'est public.** Dokos et Forgejo n'écoutent que sur `127.0.0.1` du serveur ; on les
+   joint par Tailscale (ou, en démonstration seulement, depuis le réseau local). Le pare-feu ne
+   laisse entrer d'Internet que le port SSH de maintenance : clé, puis sudo avec mot de passe.
+2. **Valider reste un geste humain.** Le jeton de l'assistant lit et crée des brouillons dans
+   Dokos ; valider, annuler ou supprimer se fait dans le navigateur, et la pièce jointe d'un
+   document validé ne se supprime plus.
+3. **L'agent n'envoie rien.** Il enregistre dans la copie du poste ; `bin/dokopilot sync` montre à
+   la personne ce qui partirait, vérifie que la copie n'a pas été détournée, puis envoie.
+4. **Les sauvegardes partent chiffrées**, chaque nuit, vers un dépôt hors du serveur ;
+   `bin/dokopilot check` échoue si la dernière a échoué ou date de plus de 36 heures.
+
+### Où sont les clés et les secrets
+
+| Quoi | Où | Protection |
+| --- | --- | --- |
+| Secrets de l'installation (mots de passe d'administration, de la base, des sauvegardes, clé Tailscale, identifiants Super PDP) | `clients/<client>/secrets.yml.age`, sur le poste qui installe | Chiffré avec age pour les clés de `recipients.txt` ; jamais en clair dans Git ; version précédente gardée en `.bak` |
+| Clé age privée, qui déchiffre ces secrets | `~/.config/dokopilot/age-identity.txt`, sur le poste qui installe | Fichier 0600 ; **à copier dans un gestionnaire de mots de passe** |
+| Secrets déchiffrés, le temps d'une commande | `~/.config/dokopilot/.run/` | Dossier 0700 refusé aux agents, effacé à la fin de la commande, même interrompue |
+| Secrets du serveur (base, sauvegardes, jeton de l'assistant, comptes Forgejo) | `/etc/dokopilot/` et les `.env` de `/opt/dokopilot/` | Fichiers 0600 et dossiers 0700, à root |
+| Jetons du poste (jeton Git, jeton Dokos du dirigeant, clé du modèle, mots de passe de messagerie et d'agenda) | `~/.config/dokopilot/<client>/` | Fichiers 0600, hors du dossier de travail, refusés à l'agent par le harnais |
+| Sauvegardes | Dépôt restic distant (`backup.repository`) | Chiffrées par `restic_password`, **à conserver aussi hors du serveur** |
+
+Trois choses à garder hors des machines, sans lesquelles une sauvegarde est illisible : la clé
+age, le mot de passe des sauvegardes (`bin/dokopilot secrets <client> show restic_password`) et
+une copie du dossier `clients/<client>/`. Détails : [docs/securite.md](docs/securite.md).
+
 ## Démarrage rapide
 
 Sur une Debian 13 fraîchement installée, qui devient le serveur (une VM de test suffit), ou sur le
@@ -156,7 +184,7 @@ cette machine », ajoutez `--local -K` aux commandes qui passent par Ansible (`i
 | `bin/dokopilot check <client>` | Contrôles de fonctionnement et de sécurité, sans rien modifier |
 | `bin/dokopilot harness <client> [--person <id>]` | Configurer le harnais et les copies du contexte sur ce poste |
 | `bin/dokopilot sync <client> [--person <id>] [--yes]` | Recevoir les changements de Forgejo, montrer ce qui va partir, puis l'envoyer après accord |
-| `bin/dokopilot backup <client>`, `restore <client> --confirm` | Sauvegarder maintenant, restaurer |
+| `bin/dokopilot backup <client>`, `restore <client> --confirm [--forgejo]` | Sauvegarder maintenant ; restaurer Dokos, ou les dépôts de contexte avec `--forgejo` |
 | `bin/dokopilot demo-reset <client>` | Recharger les données de test (profil demo) |
 | `bin/dokopilot secrets <client> edit\|show <clé>\|keys` | Lire ou modifier les secrets chiffrés |
 | `bin/dokopilot ssh <client> [--tunnel]` | Ouvrir une session de maintenance (serveur distant) |
@@ -174,13 +202,13 @@ cette machine », ajoutez `--local -K` aux commandes qui passent par Ansible (`i
 | `ansible/roles/*` | Système (base, maintenance, ssh, firewall, fail2ban, tailscale, docker, proxy), Dokos (dokos, dokos_config, demo_data, backup), harnais du poste (harness) |
 | `ansible/roles/forgejo` | Forgejo : projet Compose, comptes, organisation, équipes, dépôts, jetons, contrôles |
 | `ansible/roles/context` | Dépôt du contexte initial dans les dépôts vides |
-| `ansible/playbooks/` | `site.yml` (tout), `bootstrap.yml`, `context.yml`, `check.yml`, `backup.yml`, `restore.yml`, `demo-reset.yml`, `harness.yml`, `config.yml` |
+| `ansible/playbooks/` | `site.yml` (tout : `system.yml`, `dokos.yml`, `context.yml`, puis l'accès), `bootstrap.yml`, `check.yml`, `backup.yml`, `restore.yml`, `demo-reset.yml`, `harness.yml`, `config.yml` |
 | `context/` | Modèles du contexte (`entreprise/`, `direction/`, `perso/`) et contenu d'exemple de la démo (`demo/`) |
 | `stack/` | Image Dokos dérivée et scripts de provisionnement exécutés dans le conteneur |
 | `demo/` | Données de test de l'« Atelier Démo » |
 | `harness/` | Modèles opencode et Claude Code, agents, garde, compétences métier |
 | `vm/` | Création d'une VM locale de test (cloud-init, libvirt) |
-| `tests/` | Tests de la CLI, de la configuration, de l'installateur, du contexte, du harnais, des rôles système et de la pile Dokos |
+| `tests/` | Tests de la CLI, de la configuration, de l'installateur, du contexte, du harnais, des scripts de sauvegarde, des rôles système et de la pile Dokos |
 | `docs/` | Documentation (ci-dessous) |
 
 ## Tests
@@ -192,7 +220,7 @@ leurs résultats.
 | Commande | Ce qu'elle vérifie |
 | --- | --- |
 | `make lint` | YAML, rôles Ansible (profil production), scripts shell, syntaxe Python |
-| `make test` | Tests rapides, sans serveur : CLI, assistant d'installation, configuration, rendu du harnais et garde |
+| `make test` | Tests rapides, sans serveur : CLI et `sync`, assistant d'installation, provisionnement de Forgejo et de Dokos (parties sans serveur), configuration, rendu du harnais et garde, scripts de sauvegarde et de restauration contre un vrai dépôt restic (ignorés sans `restic`) |
 | `make test-system` | Rôles système contre un conteneur Debian 13 avec systemd (Docker) |
 | `make test-installer` | `install.sh` et l'assistant sur Debian 13, Ubuntu 24.04 et Fedora, jusqu'à la configuration validée (Docker) |
 | `make test-local-mode` | Mode « tout sur cette machine » : durcissement lancé par le compte lui-même (Docker) |
@@ -213,6 +241,7 @@ leurs résultats.
 | [VM locale](docs/vm-locale.md) | Essayer sur une VM : une commande, puis les vérifications |
 | [VM Hyper-V](docs/vm-hyperv.md) | Le même essai pas à pas sous Windows : Hyper-V, WSL et Claude Code |
 | [Sécurité](docs/securite.md) | Exposition, accès de maintenance, droits des assistants, Forgejo et jetons, secrets, mode local |
+| [Revue de sécurité de novembre 2026](docs/revue-2026-11.md) | Ce qui a été trouvé, corrigé, et ce qui reste à faire avant une mise en production |
 | [Exploitation](docs/exploitation.md) | Sauvegardes, restauration, mises à jour, supervision, Forgejo |
 | [Données de test](docs/donnees-de-test.md) | Ce que contient la démo, comment la recharger |
 | [Poste de travail](docs/poste-entrepreneur.md) | Espace de travail, harnais, connecteurs messagerie et agenda, garde-fous |

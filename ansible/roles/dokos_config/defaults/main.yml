@@ -138,6 +138,33 @@ dokos_config_critical_doctypes:
   - Stock Entry
   - Bank Transaction
   - GL Entry
+# Reports the assistants may run (MCP tool run_report): the accounting statements the
+# business skills use. A report has its own roles; the role of the assistants is added to
+# them. Reading only: a report validates nothing.
+dokos_config_assistant_reports:
+  - General Ledger
+  - Trial Balance
+  - Sales Register
+  - Purchase Register
+  - Accounts Receivable
+  - Accounts Payable
+# Submittable documents whose attached files can no longer be deleted once the document is
+# submitted (DocType property « Protect Attached Files » of Dokos): the supporting documents
+# of the accounts. Without it, whoever can write a document can delete its attachments, the
+# assistants included.
+dokos_config_protected_attachment_doctypes:
+  - Purchase Invoice
+  - Sales Invoice
+  - Payment Entry
+  - Journal Entry
+  - Purchase Order
+  - Purchase Receipt
+  - Quotation
+  - Sales Order
+  - Delivery Note
+  - Dunning
+  - Stock Entry
+  - Bank Transaction
 # Point of sale (out of scope, D-10): never readable by an assistant.
 dokos_config_pos_doctypes:
   - POS Invoice

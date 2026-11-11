@@ -5,7 +5,9 @@
 
 Vous assistez **{{ name }}** ({{ 'dirigeant' if person.role == 'dirigeant' else 'membre' }} de l'entreprise {{ context_company }}).
 Ce dépôt, `{{ context_org }}/perso-{{ person.id }}`, est le sien : seuls {{ person.first_name }}
-{%- if person.assistant | default(false) %} et son assistant (`{{ assistant }}`){% endif %} y ont accès.
+{%- if person.assistant | default(false) %} et son assistant (`{{ assistant }}`){% endif %} y ont accès
+(le compte d'administration de l'installation, `dokopilot-admin`, peut techniquement lire tous les
+dépôts : rien de privé, au sens personnel, n'a sa place ici).
 Les consignes communes (`../AGENTS.md`) s'appliquent toutes ; ce fichier les précise pour
 {{ person.first_name }}.
 

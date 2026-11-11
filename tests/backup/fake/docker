@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Stands for `docker compose` in tests/backup/run.sh: the Dokos site is the file
+# $FAKE/site-state, the Forgejo data volume is the folder $FAKE/forgejo-data, and every call
+# is logged in $FAKE/docker.log. FAKE_FAIL names a step that must fail (forgejo-copy,
+# restore, migrate, forgejo-extract).
+set -euo pipefail
+echo "$*" >> "$FAKE/docker.log"
+[[ "${1:-}" == compose ]] || { echo "fake docker: unexpected call: $*" >&2; exit 64; }
+shift
+project=""
+while [[ "${1:-}" == --project-directory || "${1:-}" == -f ]]; do
+  [[ "$1" == --project-directory ]] && project="$2"
+  shift 2
+done
+action="$1"
+shift
+all="$*"
+case "$action" in
+  stop | start) exit 0 ;;
+  exec)
+    if [[ "$all" == *" backup --with-files"* ]]; then
+      # bench backup: the four files of a backup set, in the folder the host sees.
+      set_dir="$FAKE_HOST_DIR/current"
+      stamp="20260101_000000-test"
+      gzip -c "$FAKE/site-state" > "$set_dir/$stamp-database.sql.gz"
+      tar -cf "$set_dir/$stamp-files.tar" -T /dev/null
+      tar -cf "$set_dir/$stamp-private-files.tar" -T /dev/null
+      echo '{"encryption_key": "test"}' > "$set_dir/$stamp-site_config_backup.json"
+    elif [[ "$all" == *"run.py restore"* ]]; then
+      [[ "${FAKE_FAIL:-}" != restore ]] || { echo "fake: the database import fails" >&2; exit 1; }
+      # The provisioning script: reads its JSON on stdin and imports the database.
+      python3 -c '
+import gzip, json, os, sys
+payload = json.load(sys.stdin)
+assert payload["db_root_password"] == "racine-de-test", payload
+host_path = payload["sql_file"].replace("/home/frappe/backups", os.environ["FAKE_HOST_DIR"], 1)
+open(os.environ["FAKE"] + "/site-state", "wb").write(gzip.open(host_path).read())
+'
+    elif [[ "$all" == *" migrate" ]]; then
+      [[ "${FAKE_FAIL:-}" != migrate ]] || { echo "fake: bench migrate fails" >&2; exit 1; }
+    else
+      echo "fake docker: unexpected exec: $all" >&2
+      exit 64
+    fi
+    ;;
+  run)
+    if [[ "$all" == *"--entrypoint tar forgejo"* ]]; then
+      [[ "${FAKE_FAIL:-}" != forgejo-copy ]] || { echo "fake: the copy of the volume fails" >&2; exit 1; }
+      tar -C "$FAKE/forgejo-data" -cf - .
+    elif [[ "$all" == *"--entrypoint sh forgejo"* ]]; then
+      [[ "${FAKE_FAIL:-}" != forgejo-extract ]] || { echo "fake: the extraction fails" >&2; exit 1; }
+      # As the container does: empty the volume, then extract the archive read on stdin.
+      find "$FAKE/forgejo-data" -mindepth 1 -delete
+      tar -C "$FAKE/forgejo-data" -xf -
+    else
+      echo "fake docker: unexpected run: $all" >&2
+      exit 64
+    fi
+    ;;
+  *)
+    echo "fake docker: unexpected compose action: $action ($project)" >&2
+    exit 64
+    ;;
+esac
